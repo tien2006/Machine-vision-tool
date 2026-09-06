@@ -1,0 +1,8 @@
+<Solution>
+  <Project Path="VisionFlow.Core/VisionFlow.Core.csproj" />
+  <Project Path="VisionFlow.Editor/VisionFlow.Editor.csproj" Id="2ccbda81-fd6e-40f5-9d2e-ddd43024f94b" />
+  <Project Path="VisionFlow.Engine/VisionFlow.Engine.csproj" Id="26147e29-8f51-4a31-ab03-fbeafc10b6b4" />
+  <Project Path="VisionFlow.Tests/VisionFlow.Tests.csproj" Id="582036dd-d62e-4c4b-89a6-8549e4c5fbd4" />
+  <Project Path="VisionFlow.Tools/VisionFlow.Tools.csproj" Id="5c6a86ca-7adf-4c54-a9d9-ffd72d1af877" />
+  <Project Path="VisionFlow.WPF/VisionFlow.WPF.csproj" Id="09d381cc-cc56-4649-ad6a-71242b85bb5b" />
+</Solution>

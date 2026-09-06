@@ -1,0 +1,45 @@
+﻿<UserControl x:Class="VisionFlow.Editor.Views.ImageViewer"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition x:Name="RulerRow" Height="22"/>
+            <!--x:Name="RulerRow": Đặt tên cho hàng này để trong code C# có thể ẩn/hiện hoặc 
+            thay đổi độ cao (ví dụ: bật/tắt thanh thước ngang Top Ruler).-->
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition x:Name="RulerCol" Width="34"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- góc + thông tin -->
+        <Border Grid.Row="0" Grid.Column="0" Background="#2D2D30"/>
+        <Canvas x:Name="TopRuler" Grid.Row="0" Grid.Column="1" Background="#2D2D30" ClipToBounds="True"/>
+        <Canvas x:Name="LeftRuler" Grid.Row="1" Grid.Column="0" Background="#2D2D30" ClipToBounds="True"/>
+        <!--Canvas:Loại Control tuyệt vời nhất để làm Ruler. Nó cho phép vẽ các vạch chia độ (tick marks) và số 
+        (labels) bằng tọa độ tuyệt đối $(X, Y)$ rất dễ dàng qua C# code-behind.-->
+        <!--x:Name="TopRuler": Đặt tên cho Canvas để trong file code C# có thể truy cập trực tiếp (ví dụ: 
+        TopRuler.Children.Add(...) hoặc thực hiện tính toán vẽ lại vạch thước mỗi khi người dùng Zoom / Pan ảnh).-->
+        <!--ClipToBounds="True": mọi vạch thước hoặc chữ số vẽ ra nếu vượt quá chiều cao $22\text{ px}$ hoặc nằm ngoài
+        vùng ngang của Canvas sẽ bị cắt xén đi (crop), không bị đè hay lem ra ngoài các vùng UI khác.-->
+
+        <!-- vùng ảnh -->
+        <Grid x:Name="Viewport" Grid.Row="1" Grid.Column="1" Background="#1E1E1E" ClipToBounds="True"
+              MouseWheel="OnMouseWheel" MouseDown="OnMouseDown" MouseMove="OnMouseMove" MouseUp="OnMouseUp"
+              SizeChanged="OnViewportSizeChanged">
+            <Canvas>
+                <Image x:Name="Img" Stretch="None" RenderOptions.BitmapScalingMode="NearestNeighbor"
+                       Canvas.Left="0" Canvas.Top="0"/>
+            </Canvas>
+            <Canvas x:Name="GridCanvas" IsHitTestVisible="False"/>
+            <Canvas x:Name="CrosshairCanvas" IsHitTestVisible="False"/>
+            <Canvas x:Name="Overlay" Background="Transparent"/>
+            <!--Đây chính là Canvas tương tác chính mà code C# ở các câu hỏi trước của bạn gắn _roiRect, _roiEllipse, 
+            các vạch Caliper và 8 tay nắm Handles vào.-->
+            
+            <TextBlock x:Name="ZoomLabel" Foreground="#AAA" FontSize="11" Margin="4"
+                       HorizontalAlignment="Left" VerticalAlignment="Bottom" IsHitTestVisible="False"/>
+        </Grid>
+    </Grid>
+</UserControl>

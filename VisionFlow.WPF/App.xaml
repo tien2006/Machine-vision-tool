@@ -1,0 +1,108 @@
+﻿<Application x:Class="VisionFlow.WPF.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:v="clr-namespace:VisionFlow.Editor.Views;assembly=VisionFlow.Editor">
+    <Application.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+        <!-- Template tham số theo loại (dùng chung cho Parameter Editor + bảng bên phải). -->
+        <DataTemplate x:Key="PlainTextTemplate">
+            <Grid Margin="2,3">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="140"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="{Binding Name}" VerticalAlignment="Center" Margin="0,0,6,0" TextWrapping="Wrap"/>
+                <TextBox Grid.Column="1" Text="{Binding Value, UpdateSourceTrigger=LostFocus, TargetNullValue=''}"/>
+                <!--UpdateSourceTrigger=LostFocus (chỉ cập nhật dữ liệu khi người dùng nhấp ra ngoài ô nhập)-->
+            </Grid>
+        </DataTemplate>
+        <DataTemplate x:Key="FilePathTemplate">
+            <Grid Margin="2,3">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="140"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="{Binding Name}" VerticalAlignment="Center" Margin="0,0,6,0" TextWrapping="Wrap"/>
+                <DockPanel Grid.Column="1">
+                    <Button DockPanel.Dock="Right" Content="Browse…" MinWidth="64" Margin="4,0,0,0" Command="{Binding BrowseCommand}"/>
+                    <TextBox Text="{Binding Value, UpdateSourceTrigger=LostFocus, TargetNullValue=''}"/>
+                </DockPanel>
+            </Grid>
+        </DataTemplate>
+        <DataTemplate x:Key="FolderPathTemplate">
+            <Grid Margin="2,3">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="140"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="{Binding Name}" VerticalAlignment="Center" Margin="0,0,6,0" TextWrapping="Wrap"/>
+                <DockPanel Grid.Column="1">
+                    <Button DockPanel.Dock="Right" Content="Browse…" MinWidth="64" Margin="4,0,0,0" Command="{Binding BrowseFolderCommand}"/>
+                    <TextBox Text="{Binding Value, UpdateSourceTrigger=LostFocus, TargetNullValue=''}"/>
+                </DockPanel>
+            </Grid>
+        </DataTemplate>
+        <DataTemplate x:Key="SliderTemplate">
+            <Grid Margin="2,3">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="140"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="{Binding Name}" VerticalAlignment="Center" Margin="0,0,6,0" TextWrapping="Wrap"/>
+                <!-- Slider + ô nhập số (cùng bind NumericValue → đồng bộ 2 chiều). -->
+                <Grid Grid.Column="1">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="60"/>
+                    </Grid.ColumnDefinitions>
+                    <Slider Grid.Column="0" Minimum="{Binding MinValue}" Maximum="{Binding MaxValue}"
+                            Value="{Binding NumericValue}" VerticalAlignment="Center"/>
+                    <TextBox Grid.Column="1" Margin="4,0,0,0" VerticalAlignment="Center"
+                             Text="{Binding NumericValue, StringFormat=0.######, UpdateSourceTrigger=LostFocus}"/>
+                </Grid>
+            </Grid>
+        </DataTemplate>
+        <DataTemplate x:Key="BoolTemplate">
+            <Grid Margin="2,3">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="140"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="{Binding Name}" VerticalAlignment="Center" Margin="0,0,6,0" TextWrapping="Wrap"/>
+                <CheckBox Grid.Column="1" IsChecked="{Binding Value}" VerticalAlignment="Center"/>
+            </Grid>
+        </DataTemplate>
+        <DataTemplate x:Key="EnumTemplate">
+            <Grid Margin="2,3">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="140"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="{Binding Name}" VerticalAlignment="Center" Margin="0,0,6,0" TextWrapping="Wrap"/>
+                <ComboBox Grid.Column="1" ItemsSource="{Binding EnumOptions}" SelectedItem="{Binding Value}"/>
+            </Grid>
+        </DataTemplate>
+        <DataTemplate x:Key="ReadOnlyTemplate">
+            <Grid Margin="2,3">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="140"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="{Binding Name}" VerticalAlignment="Center" Margin="0,0,6,0" TextWrapping="Wrap"/>
+                <TextBlock Grid.Column="1" Text="(set on image)" Foreground="Gray" FontStyle="Italic" VerticalAlignment="Center"/>
+            </Grid>
+        </DataTemplate>
+        <v:ParameterTemplateSelector x:Key="ParamSelector"
+            PlainTextTemplate="{StaticResource PlainTextTemplate}"
+            FilePathTemplate="{StaticResource FilePathTemplate}"
+            FolderPathTemplate="{StaticResource FolderPathTemplate}"
+            SliderTemplate="{StaticResource SliderTemplate}"
+            BoolTemplate="{StaticResource BoolTemplate}"
+            EnumTemplate="{StaticResource EnumTemplate}"
+            ReadOnlyTemplate="{StaticResource ReadOnlyTemplate}"/>
+        <!--Class ParameterTemplateSelector trong C# kế thừa từ DataTemplateSelector.
+        Nó nhận vào các tham chiếu đến 6 DataTemplate đã khai báo ở trên.
+        Khi một danh sách tham số (như ItemsControl hoặc ListBox) render dữ liệu, nó sẽ truyền đối tượng ViewModel của tham số vào ParamSelector.
+        Selector sẽ kiểm tra kiểu của tham số đó (ví dụ: Type == FilePath hay Type == Slider) và trả về DataTemplate tương ứng để giao diện tự động vẽ đúng loại control.-->
+    </Application.Resources>
+</Application>
