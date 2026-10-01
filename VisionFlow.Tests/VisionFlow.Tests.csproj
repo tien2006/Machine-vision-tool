@@ -19,6 +19,7 @@
   <ItemGroup>
     <ProjectReference Include="..\VisionFlow.Core\VisionFlow.Core.csproj" />
     <ProjectReference Include="..\VisionFlow.Engine\VisionFlow.Engine.csproj" />
+    <ProjectReference Include="..\VisionFlow.Hardware\VisionFlow.Hardware.csproj" />
     <ProjectReference Include="..\VisionFlow.Tools\VisionFlow.Tools.csproj" />
   </ItemGroup>
 

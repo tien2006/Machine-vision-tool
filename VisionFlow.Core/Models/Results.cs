@@ -70,4 +70,6 @@ public sealed class AlignResult : VisionResult
     /// vì: NominalCenter = MatchedCenter - (Offset.X, Offset.Y).
     /// </summary>
     public Point2d MatchedCenter { get; set; }
+    public double MatchedAngleDeg { get; init; }       // MỚI: góc xoay TUYỆT ĐỐI (θcur) — trước đây chỉ có ở Offset.Theta dạng LỆCH, không dùng trực tiếp cho Fixture được
+    public double Scale { get; init; } = 1.0;          // MỚI: hệ số scale đều tìm được (Xcur so với Template lúc dạy) - mặc định 1.0 nếu không có giá trị thật (VD nhánh RANSAC thất bại)
 }

@@ -22,15 +22,16 @@ namespace VisionFlow.Tools.Alignment;
 /// 1. Nạp ảnh mẫu (Template) đã dạy trước — cắt từ 1 vùng trên ảnh tham chiếu (Golden Image, đúng thao tác
 ///    "kéo khung dạy mẫu" theo tài liệu Tab Template) hoặc nạp từ file.
 /// 2. (Tuỳ chọn) Giới hạn vùng tìm kiếm (Tab Search) thay vì luôn quét toàn ảnh — tăng tốc + giảm nhận nhầm.
-/// 3. Trích đặc trưng ORB (bất biến xoay, chịu được thay đổi tỉ lệ nhẹ) cho cả Template và vùng tìm kiếm.
+/// 3. Trích đặc trưng ORB (Oriented FAST and Rotated BRIEF) (bất biến xoay, chịu được thay đổi tỉ lệ nhẹ) cho cả Template và vùng tìm kiếm.
 /// 4. Ghép cặp đặc trưng bằng BFMatcher + Lowe's Ratio Test để loại các cặp ghép mơ hồ.
 /// 5. Ước lượng phép biến đổi Similarity (xoay + tịnh tiến + scale đều) bằng RANSAC — chịu được nhiễu/ghép sai cục bộ.
 /// 6. Kiểm tra kết quả có nằm trong dung sai AngleTolerance/MinScale-MaxScale hay không (đúng vai trò "Tab Search"
 ///    trong tài liệu: giới hạn góc xoay/tỉ lệ chấp nhận được) — vượt dung sai thì coi như KHÔNG tìm thấy dù RANSAC
 ///    numerically thành công.
 /// 7. (Tuỳ chọn) SubPixel: giữ nguyên toạ độ thập phân chính xác; tắt thì làm tròn về số nguyên pixel.
-/// 8. Trả về đầy đủ BestMatchPoint/MatchScore/MatchAngle/Isfound/4 góc bounding box + AlignResult (Offset delta,
-///    dùng cho FixtureTool phía sau — GIỮ NGUYÊN cấu trúc để không phá vỡ pipeline Fixture đã có).
+/// 8. SỬA (trường phái gộp - Buổi 99): trả về AlignResult gộp ĐỦ (MatchedCenter.X, MatchedCenter.Y, MatchedAngleDeg,
+///    Scale) — đúng vai trò (Xcur, Ycur, θcur, Scale) mà công thức Similarity Transform cần — để FixtureTool
+///    chỉ cần nối DUY NHẤT 1 dây (cổng Result) thay vì phải nối rời từng cổng.
 /// </summary>
 [ToolMetadata("PMAlignt", DisplayName = "PMAlign", Category = "Alignment",
     Description = "Feature-based geometric pattern matching alignment (ORB + RANSAC), rotation/scale invariant, with search region and angle/scale tolerance.")]
@@ -50,7 +51,7 @@ public sealed class PMAlignTool : VisionTool
     private readonly OutputPort<P2> _outRightBottom;            // RightBottomCorner
     private readonly OutputPort<P2> _outLeftBottom;             // LeftBottomCorner
 
-    // Bonus: giữ nguyên cổng Result (AlignResult chứa Offset delta) để KHÔNG phá vỡ FixtureTool đang tiêu thụ nó
+    // Cổng chính thức để nối sang FixtureTool theo trường phái gộp - AlignResult giờ mang ĐỦ (X, Y, Angle, Scale).
     private readonly OutputPort<AlignResult> _outResult;
     #endregion
 
@@ -80,6 +81,7 @@ public sealed class PMAlignTool : VisionTool
     private readonly ToolParameter<bool> _drawBoundingBox;
     private readonly ToolParameter<bool> _drawAxis;
     private readonly ToolParameter<bool> _drawMatches;
+    private readonly ToolParameter<bool> _drawInfoText; // Vẽ khối chữ "ALIGNMENT FOUND / Center / Score / Angle" góc trên-trái ảnh
     #endregion
 
     public PMAlignTool()
@@ -123,6 +125,7 @@ public sealed class PMAlignTool : VisionTool
         _drawBoundingBox = AddParameter<bool>("DrawBoundingBox", true, "Draw Bounding Box", category: "Display", order: 1);
         _drawAxis = AddParameter<bool>("DrawAxis", true, "Draw Axis", category: "Display", order: 2);
         _drawMatches = AddParameter<bool>("DrawMatches", false, "Draw Feature Matches", category: "Display", order: 3);
+        _drawInfoText = AddParameter<bool>("DrawInfoText", true, "Draw Info Text", category: "Display", order: 4);
     }
 
     protected override void OnExecute(IToolContext context)
@@ -132,13 +135,13 @@ public sealed class PMAlignTool : VisionTool
 
         var src = _input.Value!.AsMat();
 
-        // ----- Bước 1: Chuyển ảnh runtime sang xám -----
+        // ----- BƯỚC 1: CHUYỂN ẢNH RUNTIME SANG XÁM -----
         Mat srcGray;
         bool srcGrayOwned = false;
         if (src.Channels() == 1) { srcGray = src; }
         else { srcGray = new Mat(); Cv2.CvtColor(src, srcGray, ColorConversionCodes.BGR2GRAY); srcGrayOwned = true; }
 
-        // ----- Bước 2: Giới hạn vùng tìm kiếm (Tab Search) nếu được bật, ngược lại quét toàn ảnh -----
+        // ----- BƯỚC 2: GIỚI HẠN VÙNG TÌM KIẾM (TAB SEARCH) NẾU ĐƯỢC BẬT, NGƯỢC LẠI QUÉT TOÀN ẢNH -----
         double searchOffsetX = 0, searchOffsetY = 0;
         Mat searchArea = srcGray;
         bool searchAreaOwned = false;
@@ -154,7 +157,7 @@ public sealed class PMAlignTool : VisionTool
             searchAreaOwned = true;
         }
 
-        // ----- Bước 3: Nạp/Cắt ảnh Template theo cấu hình TemplateImageRef -----
+        // ----- BƯỚC 3: NẠP/CẮT ẢNH TEMPLATE THEO CẤU HÌNH TEMPLATEIMAGEREF -----
         var templateRef = _template.Value;
         Mat templateGray;
         P2 nominalCenter;
@@ -162,39 +165,85 @@ public sealed class PMAlignTool : VisionTool
 
         if (!string.IsNullOrWhiteSpace(templateRef.FilePath) && File.Exists(templateRef.FilePath))
         {
+            // Trường hợp 1: Template nạp từ file ảnh đã lưu sẵn (không gắn với tọa độ trên 1 ảnh gốc cụ thể)
             using Mat templateColor = Cv2.ImRead(templateRef.FilePath, ImreadModes.Color);
-            templateGray = new Mat();
-            Cv2.CvtColor(templateColor, templateGray, ColorConversionCodes.BGR2GRAY);
+            // templateRef.FilePath: Tham số thứ nhất, truyền vào đường dẫn tệp ảnh trên ổ đĩa (ví dụ: C:\Templates\ProductA.png).
+            // Khi dùng ImreadModes.Color (tương đương giá trị 1), OpenCV sẽ ép bức ảnh đầu vào về dạng ảnh màu BGR 3 kênh (Blue, Green, Red), bất kể file
+            //      ảnh gốc trên đĩa là ảnh xám (Grayscale), ảnh RGB hay ảnh PNG có kênh alpha trong suốt.
+            // => templateColor: Tên biến chứa dữ liệu ảnh mẫu (Template) ở dạng ma trận màu BGR vừa đọc được.
+            // Tác dụng của using: Đảm bảo đối tượng templateColor sẽ tự động gọi hàm Dispose() để giải phóng vùng nhớ RAM/VRAM ngay lập tức
+            //      khi hàm OnExecute chạy xong (khi thoát khỏi phạm vi/block của lệnh).
+            templateGray = new Mat();   // Khai báo ma trận xám
+            Cv2.CvtColor(templateColor, templateGray, ColorConversionCodes.BGR2GRAY);   // Chuyển từ BGR (3 kênh) sang GRAY (1 kênh)
+            // Không có vị trí "chuẩn" nào khác ngoài tâm khung hình runtime -> quy ước Offset=0 nghĩa là vật thể nằm giữa khung ảnh
             nominalCenter = new P2(srcGray.Width / 2.0, srcGray.Height / 2.0);
             nominalAngle = 0.0;
         }
         else if (templateRef.SourceRegion.HasValue)
         {
+            // Trường hợp 2: Template được cắt từ 1 vùng chữ nhật xoay trên ảnh tham chiếu (Golden Image)
             if (_templateSource.Value == null)
                 throw new InvalidOperationException("Template được cấu hình theo SourceRegion nhưng cổng 'TemplateSource' chưa được nối ảnh tham chiếu!");
 
+            // 1. Lấy thông số vùng chọn đã dạy/vẽ trên UI (bao gồm Tâm X/Y, Chiều rộng W, Chiều cao H, Góc xoay Theta)
             RotatedRectRegion reg = templateRef.SourceRegion.Value;
             Mat refMat = _templateSource.Value!.AsMat();
 
+            // Khởi tạo điểm tâm cắt ảnh dạng số thực Point2f (OpenCV yêu cầu số thực float cho các phép tính hình học)
+            // Chuyển đổi (ép kiểu) tọa độ tâm của vùng chọn từ số thực kép (double) sang số thực đơn (float) để phù hợp với định dạng
+            //    dữ liệu đầu vào mà thư viện OpenCV (OpenCvSharp) yêu cầu.
             Point2f center = new Point2f((float)reg.Center.X, (float)reg.Center.Y);
+
+            // Khởi tạo kích thước vùng chọn (Width x Height), dùng Math.Max để đảm bảo W và H luôn >= 1 pixel, tránh lỗi crash OpenCV
             Size size = new Size(Math.Max(1, (int)reg.Width), Math.Max(1, (int)reg.Height));
-            Mat rotSource = refMat;
-            bool rotated = false;
+            Mat rotSource = refMat; // Biến con trỏ tạm, mặc định trỏ tới ảnh tham chiếu gốc
+            bool rotated = false;   // Cờ đánh dấu xem ảnh tham chiếu có vừa trải qua phép xoay hay không
+
+            // 2. Kiểm tra góc xoay của vùng chọn: Nếu khác 0 độ (dùng ngưỡng 1e-5 = 0.00001 để tránh lỗi sai số số thực float)
             if (Math.Abs(reg.AngleDeg) > 1e-5)
             {
+                // Tính ma trận biến đổi Affine 2D (2x3) để xoay ảnh xung quanh điểm 'center' đúng một góc 'reg.AngleDeg' với tỉ lệ 1.0 (không thu phóng)
                 using Mat rotMat = Cv2.GetRotationMatrix2D(center, reg.AngleDeg, 1.0);
-                rotSource = new Mat();
+
+                rotSource = new Mat(); // Cấp phát vùng nhớ mới để chứa bức ảnh sau khi xoay
+
+                // Thực hiện xoay toàn bộ bức ảnh gốc 'refMat' theo ma trận 'rotMat', kết quả ghi vào 'rotSource'.
+                // Sử dụng nội suy tuyến tính (Linear) và chế độ lấp đầy viền bằng cách lặp lại pixel mép (Replicate)
                 Cv2.WarpAffine(refMat, rotSource, rotMat, refMat.Size(), InterpolationFlags.Linear, BorderTypes.Replicate);
-                rotated = true;
+                // Cv2.WarpAffine trong OpenCV: xoay, tịnh tiến hoặc biến dạng hình học toàn bộ bức ảnh dựa trên một ma trận biến đổi Affine (2x3) được tính toán từ trước
+                // 1. refMat (Input Matrix): Bức ảnh gốc đầu vào(ảnh tham chiếu / Golden Image) cần thực hiện phép xoay.
+                // 2. rotSource (Output Matrix): Bức ảnh kết quả sau khi đã được xoay xong.
+                // 3. rotMat (Transformation Matrix):Ma trận Affine kích thước 2x3 chứa các hệ số lượng giác (sin, cos) biểu diễn góc xoay và tọa độ tâm xoay.
+                // 4. refMat.Size() (Output Size): Kích thước(Width x Height) của bức ảnh kết quả rotSource.
+                //      Ở đây truyền vào đúng bằng kích thước ảnh gốc để khung ảnh không bị thu nhỏ hay thay đổi tỉ lệ.
+                // 5. InterpolationFlags.Linear (Thuật toán nội suy):Nội suy tuyến tính (Bilinear Interpolation). Khi xoay ảnh một góc bất kỳ, tọa độ các pixel
+                //      mới thường là các số thập phân (không nằm đúng tọa độ lưới nguyên). OpenCV sẽ tự động tính toán màu sắc cho các pixel mới bằng cách
+                //      lấy trung bình có trọng số của 4 pixel lân cận.
+                //  -> Ý nghĩa: Giúp bức ảnh sau khi xoay giữ được độ mượt mà, không bị răng cưa hay vỡ nét các đường mép chi tiết.
+                // 6. BorderTypes.Replicate (Xử lý vùng viền ngoài ảnh):
+                //   - Khi xoay ảnh, 4 góc của bức ảnh mới sẽ bị trống (vì không có dữ liệu pixel gốc đắp vào).
+                //   - Replicate báo cho OpenCV biết: Hãy lặp lại (kéo dãn) màu sắc của các pixel nằm ở mép ngoài cùng để lấp đầy các khoảng trống góc đen đó,
+                //     giúp thuật toán trích xuất đặc trưng phía sau không bị bắt lầm các đường viền đen nhân tạo.
+
+                rotated = true; // Bật cờ đánh dấu đã tạo ra một ma trận xoay mới (cần phải Dispose về sau)
             }
-            using Mat templateColor = new Mat();
-            Cv2.GetRectSubPix(rotSource, size, center, templateColor);
+
+            // 3. Cắt chính xác vùng ảnh chữ nhật thẳng đứng kích thước 'size' tại vị trí tâm 'center' từ ảnh đã được xoay 'rotSource'
+            using Mat templateColor = new Mat(); // Khởi tạo vùng nhớ tạm lưu ảnh màu cắt được (dùng 'using' để tự động xả RAM)
+            Cv2.GetRectSubPix(rotSource, size, center, templateColor); // Cắt ảnh độ phân giải dưới pixel (Sub-pixel accuracy)
+
+            // Nếu ở bước 2 có tạo ảnh xoay tạm 'rotSource' (khác với ảnh gốc refMat), tiến hành giải phóng RAM C++ lập tức
             if (rotated) rotSource.Dispose();
 
-            templateGray = new Mat();
-            if (templateColor.Channels() == 1) templateColor.CopyTo(templateGray);
-            else Cv2.CvtColor(templateColor, templateGray, ColorConversionCodes.BGR2GRAY);
+            templateGray = new Mat(); // Cấp phát vùng nhớ cho ma trận ảnh Template mức xám
 
+            // Kiểm tra số kênh màu của ảnh vừa cắt:
+            if (templateColor.Channels() == 1)
+                templateColor.CopyTo(templateGray); // Nếu ảnh vốn đã là ảnh xám (1 kênh), chỉ cần copy sang
+            else
+                Cv2.CvtColor(templateColor, templateGray, ColorConversionCodes.BGR2GRAY); // Nếu là ảnh màu BGR (3 kênh), chuyển đổi sang ảnh xám 1 kênh
+
+            // Lưu lại vị trí tâm và góc xoay "mốc" (Nominal) ban đầu đã dạy trên ảnh tham chiếu -> Dùng làm căn cứ để tính Offset (dX, dY, dTheta) ở các bước sau
             nominalCenter = reg.Center;
             nominalAngle = reg.AngleDeg;
         }
@@ -203,53 +252,241 @@ public sealed class PMAlignTool : VisionTool
             throw new InvalidOperationException("Tham số Template chưa được cấu hình (cần SourceRegion hoặc FilePath hợp lệ)!");
         }
 
-        // ----- Bước 4: Trích đặc trưng ORB cho Template và vùng tìm kiếm -----
+        // ----- BƯỚC 4: TRÍCH ĐẶC TRƯNG ORB CHO TEMPLATE VÀ VÙNG TÌM KIẾM -----
+
+        // Khởi tạo bộ trích xuất đặc trưng ORB (Oriented FAST and Rotated BRIEF).
+        // - ORB = kết hợp FAST (phát hiện keypoint/góc/cạnh nhanh) + BRIEF (mô tả đặc trưng dạng nhị phân)
+        //   có bổ sung tính bất biến với xoay (Rotated) → phù hợp khi vật có thể bị xoay trên line.
+        // - Tham số truyền vào (_maxFeatures.Value) là SỐ LƯỢNG KEYPOINT TỐI ĐA mà ORB sẽ cố gắng tìm ra
+        //   trên MỖI ảnH (template và scene đều bị giới hạn bởi số này, độc lập nhau).
+        //   Đây chính là "MaxFeatures" hiển thị trên UI (mặc định 500).
+        // - "using" đảm bảo giải phóng tài nguyên native (OpenCV wrapper) ngay khi ra khỏi scope,
+        //   tránh leak bộ nhớ không quản lý (unmanaged memory) vì đây là object của OpenCvSharp.
         using var orb = ORB.Create(_maxFeatures.Value);
+
+        // Mat rỗng để ORB ghi kết quả descriptor (bộ mô tả nhị phân 256-bit/keypoint) của TEMPLATE vào.
+        // Descriptor là "vân tay" số học của từng keypoint, dùng để so khớp (matching) sau này.
         using Mat descTemplate = new Mat();
+
+        // Chạy đồng thời 2 bước trên ảnh Template (đã chuyển sang grayscale - templateGray):
+        //   A. Detect: tìm các keypoint (điểm đặc trưng: góc, cạnh có độ tương phản cao) bằng FAST.
+        //    * 1. OpenCV quét qua các pixel trên ảnh và so sánh độ sáng của pixel trung tâm với 16 pixel nằm trên vòng tròn xung quanh nó.
+        //    * 2. Nếu có một chuỗi các pixel liên tiếp sáng hơn hoặc tối hơn hẳn pixel trung tâm, điểm đó được coi là một điểm góc (KeyPoint).
+        //    * 3. Tính toán trọng tâm độ sáng (Intensity Centroid) của vùng lân cận để tìm ra góc hướng (Angle) cho điểm góc đó.
+        //   B. Compute: tính descriptor (BRIEF, đã xoay theo hướng keypoint) cho từng keypoint đó.
+        //    * 1. Xoay vùng ảnh xung quanh điểm góc theo góc hướng (Angle) vừa tính ở Bước A (để đảm bảo dù phôi bị xoay thì mã nhị phân tạo ra vẫn giống nhau).
+        //    * 2. So sánh độ sáng của 256 cặp điểm ngẫu nhiên đã định sẵn trong vùng ảnh đó:
+        //          Nếu điểm A sáng hơn điểm B -> Ghi bit 1.
+        //          Nếu điểm A tối hơn điểm B -> Ghi bit 0.
+        //    * Kết quả thu được một dãy 256 bit (32 bytes) đóng vai trò như "Dấu vân tay" của điểm đặc trưng đó.
+        // Tham số:
+        //   - templateGray : ảnh input (grayscale) của Template.
+        //   - null          : mask — không giới hạn vùng tìm keypoint (tìm trên toàn bộ ảnh template).
+        //   - out kpTemplate: mảng KeyPoint output — chứa toạ độ (x,y), hướng, scale, response... của từng điểm.
+        //   - descTemplate  : Mat output — mỗi row là 1 descriptor (32 byte = 256 bit) tương ứng 1 keypoint
+        //                     trong kpTemplate (kpTemplate[i] <-> descTemplate.Row(i)).
+        // Lưu ý: số keypoint thực tế tìm được (kpTemplate.Length) có thể NHỎ HƠN _maxFeatures nếu ảnh
+        // không đủ đặc trưng (vd bề mặt phẳng, ít texture) — đây chính là nguyên nhân matchScore bị
+        // tính sai lệch nếu code sau này lấy mẫu số cố định thay vì kpTemplate.Length thực tế.
+        // => Tóm tắt dòng lệnh:
+        //  Dòng lệnh này giúp máy tính "học" các chi tiết nhận diện của phôi mẫu: nó ghi lại ở đâu có điểm góc (kpTemplate) và chi tiết đó trông như thế nào
+        //      dưới dạng mã nhị phân (descTemplate) để ở Bước 4 có thể đem so sánh (Match) với ảnh thực tế!
         orb.DetectAndCompute(templateGray, null, out KeyPoint[] kpTemplate, descTemplate);
+
+        // Mat rỗng để ORB ghi descriptor của vùng ẢNH CẦN TÌM (Scene / Search Area) vào.
         using Mat descScene = new Mat();
+
+        // Tương tự bước trên, nhưng chạy trên "searchArea" — là vùng ảnh scene đã được crop theo
+        // Search Region (nếu bật UseSearchRegion) hoặc toàn bộ ảnh scene (nếu không bật).
+        // - kpSearchLocal: toạ độ các keypoint này là toạ độ CỤC BỘ trong searchArea (local coordinate),
+        //   tức là gốc (0,0) là góc trên-trái của vùng crop, KHÔNG phải toạ độ trên ảnh gốc.
+        //   => Sau bước này code chắc chắn phải cộng offset (searchArea gốc trong ảnh full)
+        //      vào toạ độ kpSearchLocal để quy đổi ra toạ độ ảnh thật (global), nếu không kết quả
+        //      Center/Corner trả về sẽ bị lệch khi có dùng Search Region.
+        // - descScene: mỗi row là descriptor của 1 keypoint trong kpSearchLocal, dùng để so khớp
+        //   (matching) với descTemplate ở bước tiếp theo (thường bằng BFMatcher + Hamming distance,
+        //   vì descriptor ORB là nhị phân).
         orb.DetectAndCompute(searchArea, null, out KeyPoint[] kpSearchLocal, descScene);
 
         // Quy đổi ngay toạ độ keypoint về hệ ẢNH GỐC (cộng offset vùng tìm kiếm) - để mọi bước tính toán phía sau
         // (affine, corner, overlay...) đều làm việc thống nhất trên hệ toạ độ ảnh gốc, không phải lo offset rải rác.
-        KeyPoint[] kpScene = kpSearchLocal.Select(kp => new KeyPoint(
-            new Point2f((float)(kp.Pt.X + searchOffsetX), (float)(kp.Pt.Y + searchOffsetY)),
-            kp.Size, kp.Angle, kp.Response, kp.Octave, kp.ClassId)).ToArray();
 
+        // ==== Quy đổi toạ độ keypoint từ hệ CỤC BỘ (local, gốc tại góc trên-trái của searchArea)
+        //      sang hệ TOẠ ĐỘ ẢNH GỐC (global, gốc tại góc trên-trái của ảnh scene ban đầu) ====
+        // Lý do cần bước này: nếu UseSearchRegion = true, "searchArea" ở bước trước là ảnh đã bị CROP
+        // (Cv2.GetRectSubPix) ra từ ảnh gốc, nên kpSearchLocal[i].Pt đang là toạ độ TÍNH TỪ (0,0) của
+        // vùng crop đó — không phải toạ độ thật trên ảnh gốc. Nếu không cộng lại offset, mọi phép tính
+        // phía sau (EstimateAffinePartial2D, vẽ overlay, xuất BestMatchPoint/Corner...) sẽ bị lệch đúng
+        // bằng khoảng cách từ góc ảnh gốc đến góc vùng Search Region — sai số này càng lớn nếu Search
+        // Region đặt càng xa tâm ảnh.
+        // (Nếu UseSearchRegion = false thì searchOffsetX/Y = 0, phép cộng này không ảnh hưởng gì.)
+        KeyPoint[] kpScene = kpSearchLocal.Select(kp => new KeyPoint(
+            // Point2f mới = toạ độ cục bộ (kp.Pt.X, kp.Pt.Y) + offset của vùng Search Region trong ảnh gốc
+            // (searchOffsetX/Y đã được tính ở Bước 2: = tâm vùng search - nửa kích thước vùng search).
+            new Point2f((float)(kp.Pt.X + searchOffsetX), (float)(kp.Pt.Y + searchOffsetY)),
+            // Các thuộc tính còn lại của KeyPoint giữ nguyên, KHÔNG đổi theo phép tịnh tiến toạ độ:
+            kp.Size,      // đường kính vùng lân cận (neighborhood) dùng để tính descriptor tại keypoint này
+            kp.Angle,     // hướng chủ đạo (dominant orientation) của keypoint - phần giúp ORB bất biến xoay
+            kp.Response,  // độ "mạnh"/độ nổi bật của keypoint theo hàm đánh giá của FAST/Harris - dùng để rank
+            kp.Octave,    // mức pyramid (tầng scale) mà keypoint này được phát hiện ra - phục vụ bất biến tỉ lệ
+            kp.ClassId    // id phân loại tuỳ chọn (thường không dùng trong ORB matching, giữ mặc định/-1)
+        )).ToArray();
+        // Kết quả: kpScene giờ có cùng hệ toạ độ với srcGray/overlay (ảnh gốc đầy đủ) — mọi thao tác vẽ,
+        // so khớp, tính affine phía sau đều có thể dùng trực tiếp mà không cần cộng bù offset lần nữa.
+
+        // ==== Khởi tạo các biến trung gian cho bước ghép cặp đặc trưng (Bước 5) và ước lượng biến đổi (Bước 6) ====
+
+        // Danh sách các cặp match "tốt" (đã vượt qua Lowe's Ratio Test ở Bước 5).
+        // - Khởi tạo rỗng trước vì nếu descTemplate hoặc descScene không có dòng nào (Rows == 0, tức là
+        //   Template hoặc vùng Search không tìm được keypoint nào — ví dụ ảnh toàn màu phẳng tuyệt đối),
+        //   code sẽ SKIP bước BFMatcher (xem điều kiện if ở Bước 5) và goodMatches giữ nguyên là rỗng,
+        //   tránh NullReferenceException hoặc exception từ OpenCV khi match trên Mat rỗng.
+        // - Đây cũng chính là mẫu số của công thức matchScore mới (inlierCount / goodMatches.Count).
         List<DMatch> goodMatches = new();
+
+        // Ma trận biến đổi Affine (Similarity: xoay + tịnh tiến + scale đều) ước lượng bằng RANSAC ở Bước 6.
+        // - Kiểu "Mat?" (nullable) vì có thể KHÔNG BAO GIỜ được gán giá trị nếu goodMatches.Count không đủ
+        //   (< MinInlierCount) — lúc đó code sẽ rẽ vào nhánh "else" ở Bước 7 và trả về Judge = NG ngay,
+        //   không cố tính affine trên tập match quá ít/không đủ tin cậy.
+        // - Nếu được gán: đây là ma trận 2x3 (dạng [a b tx; c d ty]) dùng để suy ra góc xoay (thetaDeg),
+        //   tỉ lệ (scale) và để map toạ độ Template -> toạ độ Scene (hàm TemplateToScene ở Bước 7).
         Mat? affine = null;
+
+        // Mask đánh dấu inlier/outlier ứng với từng cặp trong goodMatches sau khi chạy RANSAC ở Bước 6.
+        // - Kiểu "Mat?" vì chỉ được cấp phát VÀ điền giá trị khi thực sự gọi EstimateAffinePartial2D
+        //   (tức là khi goodMatches.Count >= MinInlierCount).
+        // - Khi có giá trị: mỗi dòng (Rows) tương ứng 1 phần tử trong goodMatches, giá trị byte tại đó
+        //   != 0 nghĩa là cặp match đó được RANSAC coi là INLIER (khớp với mô hình biến đổi chung),
+        //   dùng để đếm inlierCount ở Bước 7 (matchScore = inlierCount / goodMatches.Count) và để tô màu
+        //   phân biệt inlier (xanh)/outlier (đỏ) khi bật DrawMatches.
         Mat? inliersMask = null;
 
-        // ----- Bước 5: Ghép cặp đặc trưng bằng BFMatcher + Lowe's Ratio Test -----
-        if (descTemplate.Rows > 0 && descScene.Rows > 0)
+        // ----- BƯỚC 5: GHÉP CẶP ĐẶC TRƯNG BẰNG BFMATCHER (KHOẢNG CÁCH HAMMING, PHÙ HỢP MÔ TẢ NHỊ PHÂN ORB) + LOWE'S RATIO TEST -----
+
+        // Bước 5 sẽ đi so sánh từng dấu vân tay của Template với các dấu vân tay của Scene (ảnh runtime) để tìm xem điểm nào trên ảnh thật tương ứng với điểm nào trên ảnh mẫu.
+        if (descTemplate.Rows > 0 && descScene.Rows > 0)    // Kiểm tra điều kiện: Cả 2 ảnh đều phải trích xuất được ít nhất 1 điểm đặc trưng
         {
+            // Khởi tạo bộ ghép cặp Brute-Force dùng "thước đo" độ giống nhau là khoảng cách Hamming (chuyên dùng cho mã nhị phân ORB)
             using var matcher = new BFMatcher(NormTypes.Hamming);
+
+            // 1. Khởi tạo BFMatcher với khoảng cách Hamming:
+            //  - BFMatcher (Brute-Force Matcher): Thuật toán tìm kiếm theo kiểu "vét cạn". Nó lấy từng chuỗi Descriptor của ảnh Template và so sánh
+            //    lần lượt với tất cả các chuỗi Descriptor trên ảnh Scene để tìm ra cặp khớp nhất.
+            //  - NormTypes.Hamming (Khoảng cách Hamming):
+            //    * Vì đặc trưng của ORB là dãy nhị phân 256 bit (0 và 1), nên việc đo khoảng cách giữa 2 điểm đặc trưng không dùng
+            //      khoảng cách Euclid ($\sqrt{\Delta x^2 + \Delta y^2}$) thông thường.
+            //    * Khoảng cách Hamming được tính bằng phép toán XOR (⊕) giữa 2 chuỗi bit: nó chỉ đơn giản là đếm số lượng bit khác nhau giữa 2 chuỗi bit:
+            //      Ví dụ: Bit chuỗi A: 1 0 1 1 0
+            //             Bit chuỗi B: 1 0 0 1 1       -> Số bit khác nhau = 2 -> Khoảng cách Hamming = 2.
+            //      -> Ưu điểm: Phép toán XOR trên chuỗi bit được CPU xử lý ở tầng vi lệnh (Bitwise XOR + Popcount) cực kỳ nhanh, phù hợp
+            //         cho hệ thống Vision công nghiệp đòi hỏi thời gian tính toán cỡ miligiây (ms).
+            // - DMatch là viết tắt của Descriptor Match (Cặp ghép đặc trưng). Đây là một cấu trúc dữ liệu (struct) trong OpenCV dùng để lưu trữ
+            //   thông tin về kết quả so khớp giữa một điểm đặc trưng ở ảnh mẫu (Template) và một điểm đặc trưng ở ảnh thực tế (Search Area).
+            // - KnnMatch: viết tắt của k-Nearest Neighbors Match (Tìm $k$ láng giềng gần nhất).
+            //   Đây là một hàm trong OpenCV dùng để so khớp đặc trưng, là phiên bản nâng cấp của hàm tìm kiếm thông thường:
+            //    * Hàm so khớp thường (Match): Chỉ tìm ra 1 điểm duy nhất giống nhất ở ảnh thực tế cho mỗi điểm trên Template.
+            //    * Hàm KnnMatch(..., k): Cho phép tìm ra top $k$ điểm (ví dụ $k=2$ thì tìm ra 2 điểm) có độ tương đồng cao nhất ở ảnh thực tế cho mỗi điểm trên Template.
             DMatch[][] knnMatches = matcher.KnnMatch(descTemplate, descScene, 2);
-            double ratio = _ratioTestThreshold.Value;
+
+            // 2. Tìm 2 ứng viên giống nhất (k=2) trên ảnh Scene cho từng đặc trưng của Template
+            //  - k-Nearest Neighbors (k-NN) với k=2: Với mỗi một điểm đặc trưng P_{template} trên ảnh Template, thuật toán không chỉ tìm 1 điểm giống nhất,
+            //    mà sẽ tìm ra 2 điểm trên ảnh Scene giống nó nhất:
+            //    * m[0] (Ứng viên 1 - Best Match): Điểm có khoảng cách Hamming nhỏ nhất (D_1).
+            //    * m[1] (Ứng viên 2 - Second Best Match): Điểm có khoảng cách Hamming nhỏ thứ nhì (D_2).
+            // -> Kết quả knnMatches trả về là mảng 2 chiều, trong đó mỗi phần tử chứa đúng 2 đối tượng DMatch (đại diện cho ứng viên 1 và 2).
+            // Kết quả cho điểm T0 (QueryIdx = 0):
+            //      knnMatches[0][0]-> { QueryIdx = 0, TrainIdx = 0, Distance = 1 } // Ứng viên 1: S0 (tốt nhất)
+            //      knnMatches[0][1]-> { QueryIdx = 0, TrainIdx = 1, Distance = 2 } // Ứng viên 2: S1 (tốt nhì)
+            // Kết quả cho điểm T1 (QueryIdx = 1):
+            //      knnMatches[1][0]-> { QueryIdx = 1, TrainIdx = 2, Distance = 5 } // Ứng viên 1
+            //      knnMatches[1][1]-> { QueryIdx = 1, TrainIdx = 1, Distance = 12 } // Ứng viên 2
+            // - Cấu trúc của knnMatches là một mảng 2 chiều (DMatch[][]), trong đó:
+            //      * Mảng ngoài (số dòng): Đại diện cho tổng số điểm đặc trưng (keypoints) nằm trên ảnh Template.
+            //        (Ví dụ template của bạn có 300 điểm đặc trưng, thì mảng ngoài sẽ có 300 dòng).
+            //      * Mảng trong (cố định 2 phần tử): Ứng với mỗi điểm đặc trưng của template ở trên, OpenCV tìm ra 2 ứng viên tốt nhất trên ảnh thực tế ($k=2$).
+            // - Lệnh LINQ không gộp chung lại thành 1 phần tử, mà nó duyệt qua từng dòng (từng điểm đặc trưng của template) một cách độc lập
+            //  -> Do đó, goodMatches.Count sẽ bằng tổng số lượng điểm đặc trưng của Template vượt qua được bài kiểm tra Lowe's Ratio Test
+            //     (ví dụ: template có 300 điểm, nhưng chỉ có 85 điểm đạt chất lượng tốt, thì goodMatches.Count = 85).
+            double ratio = _ratioTestThreshold.Value;   // Lấy ngưỡng tỉ lệ Lowe (ví dụ: 0.75)
             goodMatches = knnMatches
-                .Where(m => m.Length == 2 && m[0].Distance < ratio * m[1].Distance)
+                .Where(m => m.Length == 2 && m[0].Distance < ratio * m[1].Distance) // Lọc: Chỉ giữ cặp nếu khoảng cách ứng viên 1 nhỏ hơn (ratio * khoảng cách ứng viên 2)
                 .Select(m => m[0])
                 .ToList();
+            // - goodMatches: List<DMatch>. (mỗi phần tử là một đối tượng DMatch đơn lẻ, chứ không còn là mảng 2 chiều nữa do đã bị hàm .Select(m => m[0]) bóc tách).
+            // - Bên trong mỗi DMatch này chứa:
+            //    * QueryIdx: Vị trí điểm đặc trưng trên ảnh Template.
+            //    * TrainIdx: Vị trí điểm đặc trưng tương ứng tìm thấy trên ảnh thực tế(Search Area).
+            //    * Distance: Khoảng cách sai số(độ lệch) giữa 2 điểm đó.
+            // - m[0]: Là ứng viên tốt nhất (gần nhất) -> Khoảng cách m[0].Distance sẽ là nhỏ nhất.
+            // - m[1]: Là ứng viên tốt nhì (đứng thứ hai) -> Khoảng cách m[1].Distance sẽ lớn hơn m[0].
+            // - Tại sao phải dùng Lowe's Ratio Test?
+            //  * Trong thực tế, ảnh công nghiệp có rất nhiều vùng họa tiết lặp lại (ví dụ: các lỗ tròn giống hệt nhau, đường kẻ song song, nền kim loại phay xước...).
+            //  * Nếu một điểm đặc trưng nằm trên vùng họa tiết lặp lại, nó sẽ có rất nhiều điểm khác trên ảnh Scene trông "na ná" như nó.
+            //    Lúc này D_1 (ứng viên tốt nhất) và D_2 (ứng viên tốt nhì) sẽ có khoảng cách xấp xỉ bằng nhau. Cặp ghép này cực kỳ mơ hồ và dễ sai.
+            //  * Nếu điểm đặc trưng đó là duy nhất (độc bản, góc cạnh rõ ràng), ứng viên tốt nhất $D_1$ sẽ vượt trội hoàn toàn so với ứng viên thứ nhì $D_2$
         }
 
         // ----- Bước 6: Ước lượng phép biến đổi Similarity bằng RANSAC -----
+
+        // Sau khi Bước 5 đã cho ra một danh sách các cặp điểm ghép goodMatches, trong danh sách đó vẫn có thể tồn tại các cặp ghép sai (do nhiễu ảnh, họa tiết lặp lại...).
+        //  -> Bước 6 dùng thuật toán RANSAC để loại bỏ hoàn toàn các cặp ghép sai đó và tìm ra mối quan hệ không gian thực sự
+        //     (tọa độ tịnh tiến $\Delta X, \Delta Y$, góc xoay $\Delta \Theta$) giữa phôi mẫu và phôi thực tế.
         if (goodMatches.Count >= _minInlierCount.Value)
         {
-            Point2f[] srcPts = goodMatches.Select(m => kpTemplate[m.QueryIdx].Pt).ToArray();
-            Point2f[] dstPts = goodMatches.Select(m => kpScene[m.TrainIdx].Pt).ToArray();
+            Point2f[] srcPts = goodMatches.Select(m => kpTemplate[m.QueryIdx].Pt).ToArray();    // Trích xuất danh sách tọa độ (X, Y) các điểm góc trên hệ ảnh Template
+            Point2f[] dstPts = goodMatches.Select(m => kpScene[m.TrainIdx].Pt).ToArray();       // Trích xuất danh sách tọa độ (X, Y) tương ứng trên hệ ảnh runtime (Scene)
+            // .pt: Thuộc tính này trả về tọa độ $2D$ $(X, Y)$ của điểm đặc trưng trên bức ảnh dưới dạng một điểm số thực Point2f.
 
-            inliersMask = new Mat();
+            inliersMask = new Mat();    // Cấp phát ma trận chứa kết quả phân loại Inlier/Outlier của RANSAC
+            // Chức năng: Khởi tạo một ma trận kiểu byte 1 cột (N x 1) để chứa kết quả phân loại của RANSAC sau khi tính toán xong.
+            // Quy ước:
+            //   * Giá trị 1 (Inlier): Cặp điểm thứ $i$ khớp đúng với mô hình hình học chung (cặp ghép đúng).
+            //   * Giá trị 0 (Outlier): Cặp điểm thứ $i$ nằm lệch khỏi quy luật hình học chung (cặp ghép sai/nhiễu).
+
+            // Chạy RANSAC để tính ma trận biến đổi Affine Partial 2D (Similarity: gồm Tịnh tiến, Xoay và Scale đều)
+            // Cv2.EstimateAffinePartial2D: Hàm này nhận vào 2 tập điểm và ước lượng ma trận Similarity Transformation (Phép biến đổi đồng dạng 2D).
+            // A. Tại sao lại dùng EstimateAffinePartial2D thay vì EstimateAffine2D chuẩn?
+            //    * EstimateAffine2D chuẩn (6 độ tự do): Cho phép tịnh tiến, xoay, scale X/Y độc lập và kéo xiên (Shear).
+            //      Trong thực tế camera cố định nhìn từ trên xuống, sản phẩm không bao giờ bị biến dạng kéo xiên.
+            //    * EstimateAffinePartial2D (4 độ tự do - Similarity): Chỉ cho phép Tịnh tiến ($t_x, t_y$), Xoay ($\theta$), và Scale đều ($s$).
+            //   -> Ma trận trả về có dạng $2 \times 3$:
+            //    [a b tx    = [s.cos(theta)   -s.sin(theta)   tx
+            //     c d ty]      s.sin(theta)    s.cos(theta)   ty]
+            //   - Ưu điểm: Cực kỳ ổn định cho bài toán Vision định vị phôi (Alignment/Guidance), không bị biến dạng méo hình do sai số điểm nhiễu.
+            // B. Thuật toán RANSAC (RANdom SAmple Consensus) hoạt động thế nào?
+            //  RANSAC giải quyết bài toán lọc nhiễu qua các vòng lặp cực nhanh:
+            //  1. Lấy mẫu: RANSAC bốc ngẫu nhiên một số lượng điểm tối thiểu (thường là 2-3 cặp điểm trong srcPts/dstPts).
+            //  2. Dựng mô hình: Tính thử một ma trận biến đổi dựa trên 2-3 cặp điểm ngẫu nhiên này.
+            //  3. Thử nghiệm (Voting): Dùng ma trận vừa tính chiếu thử toàn bộ các điểm srcPts còn lại sang hệ tọa độ mới.
+            //  4. Đếm Inliers: So sánh khoảng cách giữa điểm chiếu thử và điểm thật dstPts. Nếu khoảng cách < Threshold (ngưỡng _ransacReprojThreshold.Value),
+            //      -> điểm đó bình chọn 1 phiếu (Inlier).
+            //  5. Lặp lại: Lặp lại quy trình trên hàng trăm lần. Ma trận nào gom được nhiều phiếu bầu nhất sẽ được chọn làm kết quả cuối cùng (affine), và
+            //      danh sách các điểm bỏ phiếu cho nó sẽ được ghi nhận vào inliersMask.
+            // C. _ransacReprojThreshold.Value (Sai số tái chiếu / Reprojection Error):
+            //  - Ý nghĩa: Là bán kính vùng dung sai (tính bằng pixel, ví dụ: 3.0 px).
+            //  - Nếu một điểm sau khi chiếu bằng ma trận thử nghiệm mà nằm cách điểm thật quá 3 px, RANSAC sẽ gạch tên nó ra khỏi danh sách Inlier (đánh dấu bằng 0 trong inliersMask).
+            // => Tóm tắt kết quả sau khi Bước 5 chạy xong:
+            //  1. affine: Một ma trận 2x3 chứa chính xác góc xoay và tọa độ dịch chuyển của phôi thực tế.
+            //     (Nếu RANSAC thất bại do phôi bị che khuất hoặc quá ít điểm chuẩn, affine sẽ trả về null hoặc ma trận rỗng).
+            //  2. inliersMask: Mảng đánh dấu chính xác những cặp đặc trưng nào là "chuẩn thật" để Bước 7 dùng đếm
+            //     inlierCount, tính matchScore và tô màu phân biệt inlier/outlier khi bật DrawMatches.
             affine = Cv2.EstimateAffinePartial2D(InputArray.Create(srcPts), InputArray.Create(dstPts),
                 inliersMask, RobustEstimationAlgorithms.RANSAC, _ransacReprojThreshold.Value);
         }
 
-        // ----- Bước 7: Tính toán kết quả + kiểm tra dung sai Angle/Scale (Tab Search) -----
-        Mat overlay = new Mat();
-        Cv2.CvtColor(srcGray, overlay, ColorConversionCodes.GRAY2BGR);
+        // ----- BƯỚC 7: TÍNH TOÁN KẾT QUẢ + KIỂM TRA DUNG SAI ANGLE/SCALE (TAB SEARCH) -----
+        Mat overlay = new Mat();    // Khai báo ma trận ảnh dùng để vẽ đồ họa đè kết quả (Overlay)
+        Cv2.CvtColor(srcGray, overlay, ColorConversionCodes.GRAY2BGR);  // Chuyển ảnh xám runtime thành ảnh màu BGR để vẽ các đường nét có màu(vàng, đỏ, xanh...)
 
-        int inlierCount = 0;
+        int inlierCount = 0;        // Khai báo biến đếm số lượng cặp điểm hợp lệ (Inlier)
         double matchScore = 0.0;
         double thetaDeg = 0.0;
+        // thetaDeg chính là: vật thể tìm được trên ảnh runtime hiện đang nghiêng bao nhiêu độ so với trạng thái "thẳng" của Template
+        //  —> nói cách khác, đây là góc xoay tuyệt đối của vật tại thời điểm chụp ảnh runtime, đo trên hệ toạ độ ảnh gốc.
+        double scale = 1.0;
+        // SỬA: khai báo "scale" ở phạm vi ngoài if/else (trước đây chỉ khai báo cục bộ bên trong nhánh if) để
+        // có thể dùng được ở Bước 8 khi build AlignResult, kể cả nhánh affine null (giữ mặc định 1.0 an toàn).
+
         bool isFound = false;
         P2 matchedCenter = default, lt = default, rt = default, rb = default, lb = default;
         AlignResult result;
@@ -260,20 +497,24 @@ public sealed class PMAlignTool : VisionTool
             {
                 int rows = inliersMask.Rows;
                 for (int i = 0; i < rows; i++)
-                    if (inliersMask.At<byte>(i, 0) != 0) inlierCount++;
+                    if (inliersMask.At<byte>(i, 0) != 0) inlierCount++; // Đếm các ô có giá trị khác 0 (chính là điểm Inlier)
             }
+
+            // Điểm số khớp mẫu = (Số lượng điểm Inlier / Tổng số điểm ghép tốt ban đầu)
             matchScore = goodMatches.Count > 0 ? (double)inlierCount / goodMatches.Count : 0.0;
 
+            // Bóc tách các hệ số trong ma trận Affine 2x3: [ [a, b, tx], [c, d, ty] ]
             double a = affine.At<double>(0, 0), b = affine.At<double>(0, 1);
             double c = affine.At<double>(1, 0), d = affine.At<double>(1, 1);
             double tx = affine.At<double>(0, 2), ty = affine.At<double>(1, 2);
             thetaDeg = Math.Atan2(c, a) * 180.0 / Math.PI;
-            double scale = Math.Sqrt(a * a + c * c);
+            scale = Math.Sqrt(a * a + c * c); // SỬA: bỏ "double" phía trước vì biến đã khai báo ở phạm vi ngoài (xem trên) - giờ chỉ gán giá trị, không khai báo lại
 
+            // Hàm cục bộ (Local Function): Chiếu 1 điểm p(x,y) từ hệ tọa độ Template sang hệ tọa độ Scene nhờ ma trận Affine
             P2 TemplateToScene(P2 p) => new P2(a * p.X + b * p.Y + tx, c * p.X + d * p.Y + ty);
 
-            P2 templateCenter = new P2(templateGray.Width / 2.0, templateGray.Height / 2.0);
-            matchedCenter = TemplateToScene(templateCenter);
+            P2 templateCenter = new P2(templateGray.Width / 2.0, templateGray.Height / 2.0);    // Tính vị trí tâm đại số của ảnh Template
+            matchedCenter = TemplateToScene(templateCenter);    // Chiếu tâm Template sang vị trí thực tế tìm thấy trên ảnh Scene
 
             double w = templateGray.Width, h = templateGray.Height;
             lt = TemplateToScene(new P2(0, 0));
@@ -298,7 +539,11 @@ public sealed class PMAlignTool : VisionTool
             }
 
             var offset = new XYThetaOffset(matchedCenter.X - nominalCenter.X, matchedCenter.Y - nominalCenter.Y, thetaDeg - nominalAngle);
-            result = new AlignResult { Offset = offset, MatchedCenter = matchedCenter, Judge = isFound ? Judge.OK : Judge.NG };
+
+            // SỬA: thêm Scale = scale (biến vừa tính từ ma trận Affine) vào AlignResult - đây chính là mảnh
+            // cuối cùng để FixtureTool (hoặc bất kỳ tool nào dùng AlignResult) có thể đọc ra scale thật, gán
+            // vào AffineTransform2D.Scale thay vì luôn mặc định 1.0 như trước khi tổng quát hoá.
+            result = new AlignResult { Offset = offset, MatchedCenter = matchedCenter, MatchedAngleDeg = thetaDeg, Scale = scale, Judge = isFound ? Judge.OK : Judge.NG };
 
             if (_drawBoundingBox.Value)
             {
@@ -327,7 +572,9 @@ public sealed class PMAlignTool : VisionTool
         }
         else
         {
-            result = new AlignResult { Offset = default, MatchedCenter = default, Judge = Judge.NG };
+            // SỬA: thêm Scale = 1.0 (giá trị mặc định) để khớp cấu trúc AlignResult - FixtureTool sẽ dựa vào
+            // Judge != OK để bỏ qua, không bao giờ đọc nhầm Scale=1.0 này thành scale thật.
+            result = new AlignResult { Offset = default, MatchedCenter = default, MatchedAngleDeg = 0.0, Scale = 1.0, Judge = Judge.NG };
         }
 
         if (_useSearchRegion.Value && (_drawBoundingBox.Value || _drawAxis.Value))
@@ -336,6 +583,45 @@ public sealed class PMAlignTool : VisionTool
                 new Point((int)searchOffsetX, (int)searchOffsetY),
                 new Point((int)(searchOffsetX + _searchRegionWidth.Value), (int)(searchOffsetY + _searchRegionHeight.Value)),
                 new Scalar(200, 200, 0), 1, LineTypes.AntiAlias);
+        }
+
+        // ----- Vẽ khối chữ thông tin "ALIGNMENT FOUND/NOT FOUND" + Center/Score/Angle góc trên-trái -----
+        if (_drawInfoText.Value)
+        {
+            // Tính hệ số scale dựa trên kích thước ảnh thật, mốc chuẩn 1000px, để chữ luôn giữ ĐÚNG TỈ LỆ so
+            // với ảnh dù ảnh nhiều hay ít pixel (không còn bị "chữ khổng lồ" trên ảnh nhỏ hay "chữ tí hin" trên
+            // ảnh lớn như bản gốc dùng số tuyệt đối cố định).
+            double refDim = 1000.0;
+            double rawScale = Math.Min(overlay.Width, overlay.Height) / refDim;
+
+            // Chặn "sàn" (minimum) cho scale hiển thị chữ - KHÔNG để co nhỏ vô hạn theo ảnh, vì font Hershey
+            // của OpenCV là font VECTOR NÉT MẢNH, fontScale dưới ~0.35 sẽ khiến nét chữ mảnh hơn 1px, kết hợp
+            // AntiAlias gây hiện tượng "vỡ nét"/đứt quãng. Sàn 0.5 đảm bảo chữ luôn đủ dày để render liền mạch.
+            double textScale = Math.Max(rawScale, 0.5);
+
+            // Xanh lá khi tìm thấy, đỏ khi không - đúng quy ước màu trong ảnh mẫu
+            Scalar textColor = isFound ? new Scalar(0, 255, 0) : new Scalar(0, 0, 255);
+            var lines = new List<string> { isFound ? "ALIGNMENT FOUND" : "ALIGNMENT NOT FOUND" };
+
+            // Chỉ hiện chi tiết Center/Score/Angle khi ĐÃ tính được phép biến đổi (affine khác null) -
+            // tránh hiện toàn số 0 vô nghĩa khi RANSAC thất bại hoàn toàn (không đủ goodMatches).
+            if (affine != null && !affine.Empty())
+            {
+                lines.Add($"Center: ({matchedCenter.X:F1}, {matchedCenter.Y:F1})");
+                lines.Add($"Score: {matchScore:F3}");
+                lines.Add($"Angle: {thetaDeg:F1}°");
+            }
+
+            // Toàn bộ tham số kích thước/khoảng cách nhân theo "textScale" để giữ đúng tỉ lệ chữ so với ảnh.
+            int x = (int)(15 * textScale), y = (int)(25 * textScale), lineHeight = (int)(24 * textScale);
+            for (int i = 0; i < lines.Count; i++)
+            {
+                double fontScale = (i == 0 ? 0.7 : 0.55) * textScale; // Dòng tiêu đề to hơn các dòng thông số, giống bố cục ảnh mẫu
+                // Thickness cũng nhân theo textScale, ép sàn 1 để tránh nét dày = 0 (vô hình) khi ảnh cực nhỏ.
+                int thickness = Math.Max(1, (int)Math.Round((i == 0 ? 2 : 1) * textScale));
+                Cv2.PutText(overlay, lines[i], new Point(x, y + i * lineHeight),
+                    HersheyFonts.HersheySimplex, fontScale, textColor, thickness, LineTypes.AntiAlias);
+            }
         }
 
         // ----- Bước 8: Xuất kết quả -----
@@ -374,6 +660,10 @@ public sealed class PMAlignTool : VisionTool
 
     #endregion
 }
+
+
+
+
 
 
 

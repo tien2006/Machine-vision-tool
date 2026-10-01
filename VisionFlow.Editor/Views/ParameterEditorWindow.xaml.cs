@@ -1,4 +1,4 @@
-﻿using System.Globalization; // Nhập thư viện hỗ trợ định dạng theo vùng miền
+﻿using System.Globalization; // Nhập thư viện hỗ trợ định dạng/parse số theo vùng miền (dùng InvariantCulture cho ô nhập số)
 using System.Windows; // Nhập thư viện cơ bản cho WPF (Window, Point, RoutedEventArgs...)
 using System.Windows.Controls; // Nhập các điều khiển UI trong WPF (Canvas, Rectangle...)
 using System.Windows.Input; // Nhập thư viện xử lý sự kiện chuột và phím
@@ -25,8 +25,8 @@ namespace VisionFlow.Editor.Views // Định nghĩa không gian tên chứa các
         private Point2d _drawStart; // Điểm bắt đầu click chuột khi vẽ mới ROI
         private Point2d _grabOffset; // Khoảng cách chênh lệch từ vị trí click đến tâm ROI khi kéo di chuyển
         private int _resizeSx, _resizeSy; // Dấu của tay nắm đang kéo tương ứng trong hệ tọa độ cục bộ của ROI (-1, 0, 1)
-        private bool _suppressAngle; // Cờ chặn vòng lặp sự kiện khi cập nhật giá trị góc xoay trên slider
-        private bool _suppressZoom; // Cờ chặn vòng lặp sự kiện khi cập nhật giá trị zoom trên slider
+        private bool _suppressAngle; // Cờ chặn vòng lặp sự kiện khi cập nhật giá trị góc xoay trên slider/ô nhập số
+        private bool _suppressZoom; // Cờ chặn vòng lặp sự kiện khi cập nhật giá trị zoom trên slider/ô nhập số
 
         // Các shape overlay động (caliper, điểm cạnh, đường fit, tay nắm) — xóa & vẽ lại mỗi lần RedrawRoi.
         private readonly List<UIElement> _dynamic = new(); // Danh sách lưu các phần tử đồ họa động được vẽ thêm lên Canvas
@@ -77,8 +77,10 @@ namespace VisionFlow.Editor.Views // Định nghĩa không gian tên chứa các
                 _vm.Initialize(); // Khởi tạo dữ liệu bất đồng bộ trong ViewModel
                 if (_vm.HasRoi) // Nếu node có sử dụng ROI
                 {
-                    _suppressAngle = true; // Bật cờ ngắt sự kiện slider
+                    _suppressAngle = true; // Bật cờ ngắt sự kiện slider/textbox góc
                     AngleSlider.Value = _vm.Roi.AngleDeg; // Đồng bộ giá trị góc xoay ban đầu lên Slider
+                    // MỚI: đồng bộ luôn ô nhập số góc ngay từ lúc mở cửa sổ, tránh hiển thị rỗng/lệch với Slider
+                    AngleTextBox.Text = _vm.Roi.AngleDeg.ToString("0.##", CultureInfo.InvariantCulture);
                     _suppressAngle = false; // Tắt cờ ngắt sự kiện
                 }
                 UpdateZoomUi(); // Cập nhật thông tin thu phóng ban đầu
@@ -91,10 +93,10 @@ namespace VisionFlow.Editor.Views // Định nghĩa không gian tên chứa các
 
         private void UpdateZoomUi() // Cập nhật trạng thái hiển thị của các điều khiển thu phóng
         {
-            _suppressZoom = true; // Bật cờ ngắt sự kiện để tránh gọi vòng lặp OnZoomSliderChanged
+            _suppressZoom = true; // Bật cờ ngắt sự kiện để tránh gọi vòng lặp OnZoomSliderChanged / OnZoomTextChanged
             ZoomSlider.Value = Math.Clamp(Viewer.Zoom, ZoomSlider.Minimum, ZoomSlider.Maximum); // Giới hạn và gán giá trị Zoom vào Slider
+            ZoomText.Text = $"{Viewer.ZoomPercent:F0}%"; // Hiển thị phần trăm thu phóng (giờ TextBox có thể gõ được, nhưng vẫn set .Text bình thường ở đây)
             _suppressZoom = false; // Tắt cờ ngắt sự kiện
-            ZoomText.Text = $"{Viewer.ZoomPercent:F0}%"; // Hiển thị phần trăm thu phóng
             SizeLabel.Text = Viewer.ImagePixelWidth > 0 // Hiển thị kích thước ảnh (Chiều rộng x Chiều cao)
                 ? $"Size: {Viewer.ImagePixelWidth} × {Viewer.ImagePixelHeight}"
                 : "Size: —";
@@ -117,7 +119,43 @@ namespace VisionFlow.Editor.Views // Định nghĩa không gian tên chứa các
         private void OnZoomSliderChanged(object sender, RoutedPropertyChangedEventArgs<double> e) // Sự kiện khi kéo Slider điều chỉnh Zoom
         {
             if (_suppressZoom || Viewer is null) return; // Nếu đang cập nhật từ code hoặc Viewer chưa sẵn sàng thì dừng
-            Viewer.SetZoom(e.NewValue); // Thiết lập tỉ lệ Zoom mới cho Viewer
+            Viewer.SetZoom(e.NewValue); // Thiết lập tỉ lệ Zoom mới cho Viewer -> sẽ tự kích hoạt Viewer.ZoomChanged -> UpdateZoomUi() đồng bộ lại ZoomText
+        }
+
+        // ===== MỚI: Ô nhập số Zoom (%) — cho phép gõ trực tiếp thay vì chỉ kéo Slider =====
+
+        /// <summary>Kích hoạt khi rời khỏi ô ZoomText (click ra ngoài / Tab sang control khác).</summary>
+        private void OnZoomTextChanged(object sender, RoutedEventArgs e) => ApplyZoomText();
+        // Dùng LostFocus (thay vì TextChanged) để tránh cố gắng parse số ngay khi người dùng đang gõ dở dang
+        // (ví dụ mới gõ được "1" của "150", nếu parse ngay sẽ áp luôn 1% rồi lại nhảy về UI gây giật hình).
+
+        /// <summary>Kích hoạt khi người dùng nhấn phím trong ô ZoomText — bắt riêng phím Enter để áp dụng ngay.</summary>
+        private void OnZoomTextKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Enter) // Chỉ xử lý khi nhấn Enter, các phím khác (số, dấu chấm...) để TextBox tự nhận bình thường
+            {
+                ApplyZoomText(); // Áp giá trị vừa gõ ngay lập tức
+                Keyboard.ClearFocus(); // Bỏ focus khỏi ô (giống hành vi quen thuộc của các phần mềm khác khi Enter)
+            }
+        }
+
+        /// <summary>Đọc chuỗi trong ZoomText, parse thành % rồi áp vào Viewer; nếu gõ sai thì khôi phục hiển thị cũ.</summary>
+        private void ApplyZoomText()
+        {
+            if (_suppressZoom) return; // Nếu đang trong lượt code tự gán giá trị (từ UpdateZoomUi) thì bỏ qua, tránh vòng lặp
+
+            string text = ZoomText.Text.Trim().TrimEnd('%', ' '); // Cho phép người dùng gõ có hoặc không có ký hiệu %, ví dụ "150" hoặc "150%" đều được
+            if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double percent))
+            {
+                // Gõ sai định dạng (chữ, ký tự lạ...) -> không crash, chỉ khôi phục lại đúng % hiện tại của Viewer
+                UpdateZoomUi();
+                return;
+            }
+
+            // Chuyển từ % (VD 150) sang hệ số Zoom thực (VD 1.5), rồi kẹp trong khoảng Min/Max của ZoomSlider
+            // (0.05 - 20, tức 5% - 2000%) để không set ra giá trị vô lý (âm hoặc quá lớn làm treo render).
+            double zoom = Math.Clamp(percent / 100.0, ZoomSlider.Minimum, ZoomSlider.Maximum);
+            Viewer.SetZoom(zoom); // Áp dụng zoom mới -> Viewer.ZoomChanged sẽ tự bắn ra -> UpdateZoomUi() đồng bộ lại cả Slider và TextBox
         }
 
         private void OnFit(object sender, RoutedEventArgs e) => Viewer.ZoomToFit(); // Sự kiện bấm nút Fit -> Tự động căn chỉnh ảnh vừa khung nhìn
@@ -269,6 +307,12 @@ namespace VisionFlow.Editor.Views // Định nghĩa không gian tên chứa các
             }
         }
 
+        // Vì một hàm không thể return trực tiếp 2 vector cùng lúc, tác giả đã dùng mẹo kết hợp:
+        //  * Trả về vector $u$ thông qua kiểu trả về của hàm: (double X, double Y).
+        //  * Trả về vector $v$ thông qua các tham số truyền tham chiếu out double vx, out double vy.
+        // -> Ý nghĩa toán học bên trong hàm:
+        //  * return (Math.Cos(a), Math.Sin(a));: Đây là tọa độ của vector $u$ (trục X sau khi xoay góc $a$).
+        //  * vx = -Math.Sin(a); vy = Math.Cos(a);: Đây là tọa độ của vector $v$ (trục Y sau khi xoay góc $a$).
         private static (double X, double Y) Axes(double angleDeg, out double vx, out double vy) // Tính toán các vector trục đơn vị u và v từ góc xoay
         {
             double a = angleDeg * Math.PI / 180.0; // Chuyển đổi góc từ độ sang radian
@@ -408,7 +452,59 @@ namespace VisionFlow.Editor.Views // Định nghĩa không gian tên chứa các
             if (_suppressAngle || _vm is null || !_vm.HasRoi) return; // Kiểm tra cờ ngắt và tính hợp lệ
             var r = _vm.Roi;
             _vm.Roi = new RotatedRectRegion(r.Center, r.Width, r.Height, e.NewValue); // Cập nhật góc xoay mới cho ROI
+
+            // MỚI: đồng bộ ngược giá trị số sang AngleTextBox mỗi khi Slider đổi (do kéo tay hoặc do code gán)
+            _suppressAngle = true; // Bật cờ để lệnh set .Text dưới đây KHÔNG kích hoạt lại OnAngleTextChanged
+            AngleTextBox.Text = e.NewValue.ToString("0.##", CultureInfo.InvariantCulture); // Định dạng tối đa 2 chữ số thập phân, gọn cho ô nhỏ
+            _suppressAngle = false; // Tắt cờ ngay sau khi set xong
+
             RedrawRoi(); // Vẽ lại ROI theo góc mới
+        }
+
+        // ===== MỚI: Ô nhập số góc (độ) — cho phép gõ chính xác thay vì chỉ kéo Slider =====
+
+        /// <summary>Kích hoạt khi rời khỏi ô AngleTextBox (click ra ngoài / Tab sang control khác).</summary>
+        private void OnAngleTextChanged(object sender, RoutedEventArgs e) => ApplyAngleTextBox();
+        // Dùng LostFocus thay vì TextChanged vì lý do tương tự Zoom: tránh parse lỡ dở khi đang gõ
+        // (ví dụ đang gõ "-1" của "-15", ký tự "-" một mình chưa phải số hợp lệ).
+
+        /// <summary>Kích hoạt khi người dùng nhấn phím trong ô AngleTextBox — bắt riêng Enter để áp dụng ngay.</summary>
+        private void OnAngleTextKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Enter) // Chỉ can thiệp khi Enter, để các phím số/dấu trừ/dấu chấm gõ bình thường
+            {
+                ApplyAngleTextBox(); // Áp giá trị ngay
+                Keyboard.ClearFocus(); // Bỏ focus, kích hoạt luôn hiệu ứng "chốt" giá trị giống nhiều phần mềm khác
+            }
+        }
+
+        /// <summary>Đọc chuỗi trong AngleTextBox, chuẩn hoá về [-180,180], áp vào Slider + ROI; nếu gõ sai thì khôi phục.</summary>
+        private void ApplyAngleTextBox()
+        {
+            if (_suppressAngle || _vm is null || !_vm.HasRoi) return; // Đang trong lượt code tự gán, hoặc chưa sẵn sàng -> bỏ qua
+
+            if (!double.TryParse(AngleTextBox.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double newAngle))
+            {
+                // Gõ sai định dạng (chữ, ký tự lạ, để trống...) -> không crash, khôi phục lại đúng giá trị hiện tại của Slider
+                AngleTextBox.Text = AngleSlider.Value.ToString("0.##", CultureInfo.InvariantCulture);
+                return;
+            }
+
+            // Chuẩn hoá góc về khoảng [-180, 180) theo kiểu "vòng tròn" (modulo), KHÔNG dùng Math.Clamp.
+            // Lý do: nếu người dùng gõ 200°, Clamp sẽ cắt cứng về 180° (SAI Ý NGHĨA HÌNH HỌC, vì 200° và 180°
+            // là 2 hướng khác nhau). Công thức dưới đây tự động quy 200° -> -160° (đúng vị trí góc thực tế),
+            // giữ nguyên ý nghĩa vật lý của góc xoay thay vì chỉ chặn biên một cách máy móc.
+            newAngle = ((newAngle + 180.0) % 360.0 + 360.0) % 360.0 - 180.0;
+
+            _suppressAngle = true; // Chặn để việc set Slider.Value dưới đây không gọi ngược lại OnAngleChanged -> ApplyAngleTextBox
+            AngleSlider.Value = newAngle; // Đồng bộ Slider theo giá trị vừa gõ
+            AngleTextBox.Text = newAngle.ToString("0.##", CultureInfo.InvariantCulture); // Ghi lại giá trị đã chuẩn hoá (phòng trường hợp vừa quy đổi 200->-160)
+            _suppressAngle = false; // Mở lại cờ
+
+            // Vì OnAngleChanged bị chặn bởi cờ ở trên nên KHÔNG tự cập nhật _vm.Roi — phải tự làm ở đây:
+            var r = _vm.Roi;
+            _vm.Roi = new RotatedRectRegion(r.Center, r.Width, r.Height, newAngle); // Ghi góc mới vào ROI thật (tự động gói lại đúng kiểu TemplateImageRef nếu cần, xem property Roi trong ViewModel)
+            RedrawRoi(); // Vẽ lại khung ROI theo góc mới ngay lập tức
         }
 
         // ---- Buttons ----

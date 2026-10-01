@@ -1,0 +1,1145 @@
+﻿<!--
+==================== Vai trò chính: Giao diện tab "PC Control" — dựng lại đúng bố cục màn hình mẫu bạn gửi:
+    Header (tiêu đề + đồng hồ + operator + trạng thái Online) + Sidebar (Tổng quan/Điều khiển/Công thức/
+    Báo cáo/Lịch sử/Cài đặt) + Dashboard (thẻ thiết bị, số liệu sản xuất, điều khiển hệ thống/robot/băng tải,
+    camera+kết quả, công thức hiện tại, lịch sử hoạt động, IO/mạng).
+==================== Phụ thuộc vào:  PcControlViewModel (DataContext) — namespace VisionFlow.Editor.ViewModels.
+VỊ TRÍ ĐẶT FILE: project VisionFlow.Editor (WPF), thư mục Views/ — namespace VisionFlow.Editor.Views.
+GHI CHÚ: phần hình minh hoạ cơ khí (băng tải/robot/camera vẽ chi tiết) trong ảnh mẫu KHÔNG được dựng lại
+1:1 ở đây (tốn công vẽ WPF Shape mà không có giá trị vận hành thật) — thay bằng các khung điều khiển/số liệu
+đầy đủ chức năng. Nếu cần ảnh sơ đồ, chèn 1 ảnh tĩnh (PNG sơ đồ máy thật của bạn) vào khung "Sơ đồ hệ thống".
+-->
+<UserControl x:Class="VisionFlow.Editor.Views.PcControlView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:sys="clr-namespace:System;assembly=mscorlib"
+             xmlns:vm="clr-namespace:VisionFlow.Editor.ViewModels">
+    <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+        <ObjectDataProvider x:Key="IoKindValues" MethodName="GetValues" ObjectType="{x:Type sys:Enum}">
+            <ObjectDataProvider.MethodParameters>
+                <x:Type TypeName="vm:IoKind"/>
+            </ObjectDataProvider.MethodParameters>
+        </ObjectDataProvider>
+
+        <!-- Card khung chung: nền trắng bo góc nhẹ, dùng cho mọi ô "widget" trong Dashboard -->
+        <Style x:Key="CardStyle" TargetType="Border">
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="Padding" Value="12"/>
+            <Setter Property="Margin" Value="0,0,10,10"/>
+            <Setter Property="BorderBrush" Value="#DDE3EA"/>
+            <Setter Property="BorderThickness" Value="1"/>
+        </Style>
+        <Style x:Key="CardHeaderStyle" TargetType="Border">
+            <Setter Property="Background" Value="#0B3D66"/>
+            <Setter Property="CornerRadius" Value="4"/>
+            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="Margin" Value="0,0,0,8"/>
+        </Style>
+        <Style x:Key="CardHeaderText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+        </Style>
+        <Style x:Key="BigActionButton" TargetType="Button">
+            <Setter Property="Padding" Value="10,10"/>
+            <Setter Property="Margin" Value="0,0,6,6"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="BorderThickness" Value="0"/>
+        </Style>
+        <!-- Sidebar giống ảnh mẫu: nền xanh navy đậm, item chọn có nền xanh sáng hơn -->
+        <Style x:Key="SidebarTabItem" TargetType="TabItem">
+            <Setter Property="Padding" Value="14,12"/>
+            <Setter Property="Foreground" Value="#C9D6E3"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Border x:Name="Bd" Background="Transparent" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter ContentSource="Header" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#1565C0"/>
+                                <Setter Property="Foreground" Value="White"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#123A5C"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+
+    <Grid>
+        <DockPanel Background="#EEF2F6" LastChildFill="True">
+
+            <!-- ============================= HEADER ============================= -->
+            <Border DockPanel.Dock="Top" Background="#0B3D66" Padding="16,10">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="HỆ THỐNG TỰ ĐỘNG HÓA GẮP - ĐẶT VÀ KIỂM TRA BẰNG CAMERA"
+                               Foreground="White" FontSize="18" FontWeight="Bold"/>
+                        <TextBlock Text="PC – PLC Mitsubishi – Camera Cognex – Robot UR – VisionFlow"
+                               Foreground="#AFC6DE" FontSize="12" Margin="0,2,0,0"/>
+                        <!-- THÊM: StatusText hiển thị ở MỌI tab, không chỉ riêng tab Điều khiển -->
+                        <TextBlock Text="{Binding StatusText}" Foreground="#9CDCFE" FontSize="12" FontWeight="SemiBold" Margin="0,4,0,0"/>
+                        <!-- THÊM: cảnh báo hàng đợi MES/DB — chỉ hiện khi có bản ghi đang chờ đẩy xuống SQL -->
+                        <TextBlock Foreground="#FFB300" FontSize="12" FontWeight="Bold" Margin="0,2,0,0">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding PendingWriteCount}" Value="0">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        <Run Text="⚠ Đang chờ gửi lên SQL Server: "/><Run Text="{Binding PendingWriteCount}"/><Run Text=" bản ghi"/>
+                        </TextBlock>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                        <StackPanel Margin="0,0,20,0">
+                            <TextBlock Text="{Binding CurrentTime, StringFormat='dd/MM/yyyy'}" Foreground="White" HorizontalAlignment="Right" FontSize="12"/>
+                            <TextBlock Text="{Binding CurrentTime, StringFormat='HH:mm:ss'}" Foreground="White" HorizontalAlignment="Right" FontWeight="Bold"/>
+                        </StackPanel>
+                        <StackPanel Margin="0,0,16,0">
+                            <TextBlock Text="{Binding OperatorName}" Foreground="White" FontSize="12" HorizontalAlignment="Right"/>
+                            <TextBlock Text="{Binding CurrentRole}" Foreground="#AFC6DE" FontSize="11" HorizontalAlignment="Right"/>
+                        </StackPanel>
+                        <Border CornerRadius="12" Padding="10,4" VerticalAlignment="Center">
+                            <Border.Style>
+                                <Style TargetType="Border">
+                                    <Setter Property="Background" Value="#B71C1C"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding LinkState}" Value="Connected">
+                                            <Setter Property="Background" Value="#2E7D32"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Border.Style>
+                            <TextBlock Foreground="White" FontSize="11" FontWeight="Bold">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Text" Value="● Hệ thống Offline"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding LinkState}" Value="Connected">
+                                                <Setter Property="Text" Value="● Hệ thống Online"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </Border>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- ============================= SIDEBAR + NỘI DUNG ============================= -->
+            <TabControl TabStripPlacement="Left" Background="#EEF2F6" BorderThickness="0">
+                <TabControl.Resources>
+                    <Style TargetType="TabItem" BasedOn="{StaticResource SidebarTabItem}"/>
+                </TabControl.Resources>
+                <TabControl.Template>
+                    <ControlTemplate TargetType="TabControl">
+                        <DockPanel>
+                            <Border DockPanel.Dock="Left" Background="#0E2A44" Width="170">
+                                <DockPanel>
+                                    <!-- Mục 3: BUZZSTOP/ALMRESET — Mục 1: nút Đăng nhập/Đăng xuất — cố định đáy Sidebar -->
+                                    <StackPanel DockPanel.Dock="Bottom" Margin="10,0,10,14">
+                                        <Button Content="BUZZSTOP" Command="{Binding BuzzStopCommand}" Background="#F9A825" Foreground="Black"
+                                            FontWeight="Bold" Padding="0,8" Margin="0,0,0,6"/>
+                                        <Button Content="ALMRESET" Command="{Binding AlarmResetCommand}" Background="#E53935" Foreground="White"
+                                            FontWeight="Bold" Padding="0,8" Margin="0,0,0,14"/>
+
+                                        <Button Content="Đăng nhập" Command="{Binding OpenLoginPopupCommand}" Padding="0,8"
+                                            Background="#1565C0" Foreground="White" FontWeight="Bold">
+                                            <Button.Style>
+                                                <Style TargetType="Button">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsLoggedIn}" Value="True">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Button.Style>
+                                        </Button>
+                                        <Button Content="Đăng xuất" Command="{Binding LogoutCommand}" Padding="0,8"
+                                            Background="#546E7A" Foreground="White" FontWeight="Bold">
+                                            <Button.Style>
+                                                <Style TargetType="Button">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsLoggedIn}" Value="True">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Button.Style>
+                                        </Button>
+                                    </StackPanel>
+
+                                    <TabPanel IsItemsHost="True" Background="Transparent"/>
+                                </DockPanel>
+                            </Border>
+
+                            <!-- ============================= THÔNG SỐ CÔNG THỨC — đối xứng Sidebar, rộng gấp đôi (340px) ============================= -->
+                            <Border DockPanel.Dock="Right" Width="340" Background="White" BorderBrush="#DDE3EA" BorderThickness="1,0,0,0">
+                                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                    <StackPanel Margin="14">
+                                        <Border Style="{StaticResource CardHeaderStyle}" Margin="0,0,0,12">
+                                            <TextBlock Text="Thông số công thức" Style="{StaticResource CardHeaderText}" FontSize="14"/>
+                                        </Border>
+
+                                        <!-- Recipe No. / Recipe Name -->
+                                        <Grid Margin="0,0,0,10">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="70"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel>
+                                                <TextBlock Text="Recipe No." FontSize="11" Foreground="#777"/>
+                                                <TextBox Text="{Binding RecipeNo}" Margin="0,2,6,0"/>
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="1">
+                                                <TextBlock Text="Recipe Name" FontSize="11" Foreground="#777"/>
+                                                <TextBox Text="{Binding RecipeName}" Margin="0,2,0,0"/>
+                                            </StackPanel>
+                                        </Grid>
+
+                                        <!-- Total time / Remaining time (Recipe) -->
+                                        <Grid Margin="0,0,0,10">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel>
+                                                <TextBlock Text="Total time" FontSize="11" Foreground="#777"/>
+                                                <TextBlock Text="{Binding RecipeTotalTimeText}" FontWeight="Bold" FontSize="14"/>
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="1">
+                                                <TextBlock Text="Remaining time" FontSize="11" Foreground="#777"/>
+                                                <TextBlock Text="{Binding RecipeRemainingTimeText}" FontWeight="Bold" FontSize="14" Foreground="#1565C0"/>
+                                            </StackPanel>
+                                        </Grid>
+
+                                        <Separator Margin="0,4,0,10"/>
+
+                                        <!-- Step No. / Step Name -->
+                                        <Grid Margin="0,0,0,10">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="70"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel>
+                                                <TextBlock Text="Step No." FontSize="11" Foreground="#777"/>
+                                                <TextBlock Text="{Binding CurrentStepNo}" FontWeight="Bold" Margin="0,2,0,0"/>
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="1">
+                                                <TextBlock Text="Step Name" FontSize="11" Foreground="#777"/>
+                                                <TextBlock Text="{Binding CurrentStepName}" FontWeight="Bold" Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/>
+                                            </StackPanel>
+                                        </Grid>
+
+                                        <!-- Step time / Remaining time (Step) -->
+                                        <Grid Margin="0,0,0,14">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel>
+                                                <TextBlock Text="Step time" FontSize="11" Foreground="#777"/>
+                                                <TextBlock Text="{Binding StepTotalTimeText}" FontWeight="Bold" FontSize="14"/>
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="1">
+                                                <TextBlock Text="Remaining time" FontSize="11" Foreground="#777"/>
+                                                <TextBlock Text="{Binding StepRemainingTimeText}" FontWeight="Bold" FontSize="14" Foreground="#1565C0"/>
+                                            </StackPanel>
+                                        </Grid>
+
+                                        <!-- Status -->
+                                        <TextBlock Text="Status" FontSize="11" Foreground="#777"/>
+                                        <Border CornerRadius="4" Padding="8,5" Margin="0,2,0,12" HorizontalAlignment="Left">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="Background" Value="#9E9E9E"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding DisplayedRecipeStatus}" Value="Idling">
+                                                            <Setter Property="Background" Value="#546E7A"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding DisplayedRecipeStatus}" Value="Running">
+                                                            <Setter Property="Background" Value="#2E7D32"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding DisplayedRecipeStatus}" Value="Paused">
+                                                            <Setter Property="Background" Value="#F9A825"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding DisplayedRecipeStatus}" Value="Error">
+                                                            <Setter Property="Background" Value="#C62828"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
+                                            <TextBlock Text="{Binding DisplayedRecipeStatus}" Foreground="White" FontWeight="Bold"/>
+                                        </Border>
+
+                                        <!-- Main alarm -->
+                                        <TextBlock Text="Main alarm" FontSize="11" Foreground="#777"/>
+                                        <TextBlock Text="{Binding MainAlarmText}" FontWeight="SemiBold" Margin="0,2,0,12" TextWrapping="Wrap">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="#2E7D32"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding MainAlarmText}" Value="Không có cảnh báo">
+                                                            <Setter Property="Foreground" Value="#2E7D32"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+
+                                        <Separator Margin="0,0,0,10"/>
+
+                                        <!-- Robot / Camera / Conveyor -->
+                                        <Grid Margin="0,0,0,8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel>
+                                                <TextBlock Text="Robot status" FontSize="11" Foreground="#777"/>
+                                                <TextBlock Text="{Binding RobotStatusText}" FontWeight="SemiBold"/>
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="1">
+                                                <TextBlock Text="Camera status" FontSize="11" Foreground="#777"/>
+                                                <TextBlock Text="{Binding CameraStatusText}" FontWeight="SemiBold"/>
+                                            </StackPanel>
+                                        </Grid>
+                                        <TextBlock Text="Conveyor speed" FontSize="11" Foreground="#777" Margin="0,0,0,0"/>
+                                        <TextBlock Margin="0,2,0,12" FontWeight="SemiBold">
+                                        <Run Text="{Binding ConveyorSpeedPercent, StringFormat='{}{0:0}'}"/><Run Text=" %"/>
+                                        </TextBlock>
+
+                                        <Separator Margin="0,0,0,10"/>
+
+                                        <!-- Bổ sung thêm cho đủ ngữ cảnh vận hành: kết nối PLC, chế độ, sản lượng -->
+                                        <Grid Margin="0,0,0,8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel>
+                                                <TextBlock Text="Kết nối PLC" FontSize="11" Foreground="#777"/>
+                                                <TextBlock Text="{Binding LinkState}" FontWeight="SemiBold"/>
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="1">
+                                                <TextBlock Text="Chế độ" FontSize="11" Foreground="#777"/>
+                                                <TextBlock FontWeight="SemiBold">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Text" Value="Bằng tay"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsAutoMode}" Value="True">
+                                                                    <Setter Property="Text" Value="Tự động"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </StackPanel>
+                                        </Grid>
+                                        <TextBlock Text="Sản lượng hôm nay" FontSize="11" Foreground="#777"/>
+                                        <TextBlock FontWeight="SemiBold" Margin="0,2,0,0">
+                                        <Run Text="{Binding TotalCount}"/><Run Text=" / "/><Run Text="{Binding TotalTarget}"/>
+                                        <Run Text="  (OK "/><Run Text="{Binding OkCount}"/><Run Text=" / NG "/><Run Text="{Binding NgCount}"/><Run Text=")"/>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </ScrollViewer>
+                            </Border>
+
+                            <ContentPresenter ContentSource="SelectedContent"/>
+                        </DockPanel>
+                    </ControlTemplate>
+                </TabControl.Template>
+
+                <!-- ========================================================= TAB: TỔNG QUAN (Dashboard) ========================================================= -->
+                <TabItem Header="🖥  Tổng quan">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="14">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="2*"/>
+                                <ColumnDefinition Width="1*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <!-- Hàng thẻ thiết bị -->
+                            <ItemsControl Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" ItemsSource="{Binding DeviceCards}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <UniformGrid Rows="1"/>
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Style="{StaticResource CardStyle}">
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding Name}" FontWeight="Bold" FontSize="13"/>
+                                                <TextBlock Text="{Binding SubtitleText}" Foreground="#777" FontSize="11" Margin="0,2,0,6"/>
+                                                <StackPanel Orientation="Horizontal">
+                                                    <Ellipse Width="9" Height="9" Margin="0,0,5,0" VerticalAlignment="Center">
+                                                        <Ellipse.Style>
+                                                            <Style TargetType="Ellipse">
+                                                                <Setter Property="Fill" Value="Gray"/>
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding IsOnline}" Value="True">
+                                                                        <Setter Property="Fill" Value="#2E7D32"/>
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Ellipse.Style>
+                                                    </Ellipse>
+                                                    <TextBlock Text="{Binding StatusText}" FontSize="12" FontWeight="SemiBold"/>
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <!-- Cột trái: Camera/Kết quả, Công thức hiện tại, Lịch sử hoạt động, IO/Mạng -->
+                            <UniformGrid Grid.Row="1" Grid.Column="0" Columns="2">
+
+                                <Border Style="{StaticResource CardStyle}">
+                                    <StackPanel>
+                                        <Border Style="{StaticResource CardHeaderStyle}">
+                                            <TextBlock Text="Hình ảnh từ Camera" Style="{StaticResource CardHeaderText}"/>
+                                        </Border>
+                                        <StackPanel>
+                                            <TextBlock Text="Kết quả kiểm tra" FontSize="11" Foreground="#777"/>
+                                            <Border CornerRadius="4" Padding="8,4" HorizontalAlignment="Left" Margin="0,2,0,8">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="Background" Value="#C62828"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding LastResultIsOk}" Value="True">
+                                                                <Setter Property="Background" Value="#2E7D32"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                                <TextBlock Foreground="White" FontWeight="Bold">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Text" Value="NG"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding LastResultIsOk}" Value="True">
+                                                                    <Setter Property="Text" Value="OK"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </Border>
+                                            <TextBlock FontSize="12">
+                                            <Run Text="Tọa độ gắp (X, Y, R)" Foreground="#777"/>
+                                            </TextBlock>
+                                            <TextBlock FontSize="12" FontWeight="SemiBold">
+                                            <Run Text="X:"/><Run Text="{Binding LastGripX, Mode=OneWay, StringFormat=' {0:0.0}'}"/>
+                                            <Run Text="  Y:"/><Run Text="{Binding LastGripY, Mode=OneWay, StringFormat=' {0:0.0}'}"/>
+                                            <Run Text="  R:"/><Run Text="{Binding LastGripR, Mode=OneWay, StringFormat=' {0:0.0}°'}"/>
+                                            </TextBlock>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource CardStyle}">
+                                    <StackPanel>
+                                        <Border Style="{StaticResource CardHeaderStyle}">
+                                            <TextBlock Text="Công thức hiện tại" Style="{StaticResource CardHeaderText}"/>
+                                        </Border>
+                                        <ComboBox ItemsSource="{Binding AvailableRecipes}" SelectedItem="{Binding RecipeName}" Margin="0,0,0,8"/>
+                                        <TextBlock FontSize="12" Foreground="#777" Text="Tên công thức"/>
+                                        <TextBlock FontSize="13" FontWeight="SemiBold" Text="{Binding RecipeName}" Margin="0,0,0,6"/>
+                                        <TextBlock FontSize="12" Foreground="#777" Text="Số bước đã khai báo (tab Công thức)"/>
+                                        <TextBlock FontSize="13" FontWeight="SemiBold" Text="{Binding RecipeSteps.Count}"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource CardStyle}">
+                                    <StackPanel>
+                                        <Border Style="{StaticResource CardHeaderStyle}">
+                                            <TextBlock Text="Lịch sử hoạt động" Style="{StaticResource CardHeaderText}"/>
+                                        </Border>
+                                        <DataGrid ItemsSource="{Binding ActivityLog}" AutoGenerateColumns="False" IsReadOnly="True"
+                                              HeadersVisibility="Column" MaxHeight="180" RowHeight="24">
+                                            <DataGrid.Columns>
+                                                <DataGridTextColumn Header="Thời gian" Binding="{Binding Timestamp, StringFormat='HH:mm:ss'}" Width="70"/>
+                                                <DataGridTextColumn Header="Sự kiện" Binding="{Binding EventText}" Width="*"/>
+                                                <DataGridTextColumn Header="Kết quả" Binding="{Binding Result}" Width="55"/>
+                                            </DataGrid.Columns>
+                                        </DataGrid>
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource CardStyle}">
+                                    <StackPanel>
+                                        <Border Style="{StaticResource CardHeaderStyle}">
+                                            <TextBlock Text="IO / Trạng thái thiết bị" Style="{StaticResource CardHeaderText}"/>
+                                        </Border>
+                                        <ItemsControl ItemsSource="{Binding SystemIoPoints}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Grid Margin="0,2">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="40"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="40"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBlock Text="{Binding Address}" FontWeight="Bold" FontSize="12"/>
+                                                        <TextBlock Grid.Column="1" Text="{Binding Label}" FontSize="12" Foreground="#555"/>
+                                                        <TextBlock Grid.Column="2" FontSize="11" FontWeight="Bold" HorizontalAlignment="Right">
+                                                            <TextBlock.Style>
+                                                                <Style TargetType="TextBlock">
+                                                                    <Setter Property="Text" Value="OFF"/>
+                                                                    <Setter Property="Foreground" Value="#999"/>
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding Value}" Value="True">
+                                                                            <Setter Property="Text" Value="ON"/>
+                                                                            <Setter Property="Foreground" Value="#2E7D32"/>
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </TextBlock.Style>
+                                                        </TextBlock>
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                        <TextBlock Margin="0,8,0,0" FontSize="11" Foreground="#0B3D66">
+                                        <Run Text="IP PLC: "/><Run Text="{Binding ConnectionDescription, Mode=OneWay}"/>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Border>
+                            </UniformGrid>
+
+                            <!-- Cột phải: Sản xuất, Điều khiển hệ thống, Robot, Băng tải -->
+                            <StackPanel Grid.Row="1" Grid.Column="1">
+
+                                <Border Style="{StaticResource CardStyle}">
+                                    <StackPanel>
+                                        <Border Style="{StaticResource CardHeaderStyle}">
+                                            <TextBlock Text="Thông số sản xuất" Style="{StaticResource CardHeaderText}"/>
+                                        </Border>
+                                        <TextBlock Text="Tổng số sản phẩm" FontSize="11" Foreground="#777"/>
+                                        <TextBlock FontSize="24" FontWeight="Bold">
+                                        <Run Text="{Binding TotalCount, Mode=OneWay}"/><Run Text=" / "/><Run Text="{Binding TotalTarget, Mode=OneWay}"/>
+                                        </TextBlock>
+                                        <ProgressBar Value="{Binding TotalPercent, Mode=OneWay}" Maximum="100" Height="8" Margin="0,4,0,10"/>
+                                        <UniformGrid Columns="2">
+                                            <Border Background="#2E7D32" CornerRadius="4" Padding="8" Margin="0,0,4,0">
+                                                <StackPanel>
+                                                    <TextBlock Text="OK" Foreground="White" FontWeight="Bold"/>
+                                                    <TextBlock Foreground="White" FontSize="16" FontWeight="Bold">
+                                                    <Run Text="{Binding OkCount, Mode=OneWay}"/><Run Text="  ("/><Run Text="{Binding OkPercent, Mode=OneWay}"/><Run Text="%)"/>
+                                                    </TextBlock>
+                                                </StackPanel>
+                                            </Border>
+                                            <Border Background="#C62828" CornerRadius="4" Padding="8" Margin="4,0,0,0">
+                                                <StackPanel>
+                                                    <TextBlock Text="NG" Foreground="White" FontWeight="Bold"/>
+                                                    <TextBlock Foreground="White" FontSize="16" FontWeight="Bold">
+                                                    <Run Text="{Binding NgCount, Mode=OneWay}"/><Run Text="  ("/><Run Text="{Binding NgPercent, Mode=OneWay}"/><Run Text="%)"/>
+                                                    </TextBlock>
+                                                </StackPanel>
+                                            </Border>
+                                        </UniformGrid>
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource CardStyle}">
+                                    <StackPanel>
+                                        <Border Style="{StaticResource CardHeaderStyle}">
+                                            <TextBlock Text="Điều khiển hệ thống" Style="{StaticResource CardHeaderText}"/>
+                                        </Border>
+                                        <TextBlock Text="Chế độ vận hành" FontSize="11" Foreground="#777"/>
+                                        <UniformGrid Columns="2" Margin="0,2,0,10">
+                                            <Button Content="Tự động" Style="{StaticResource BigActionButton}" Background="#1565C0"
+                                                Command="{Binding EnableAutoModeCommand}"/>
+                                            <Button Content="Bằng tay" Style="{StaticResource BigActionButton}" Background="#546E7A"
+                                                Command="{Binding EnableManualModeCommand}"/>
+                                        </UniformGrid>
+                                        <TextBlock Text="Trạng thái cell" FontSize="11" Foreground="#777"/>
+                                        <TextBlock FontWeight="Bold" Foreground="#2E7D32" Margin="0,0,0,10">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Text" Value="Đang chạy"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsCellRunning}" Value="False">
+                                                            <Setter Property="Text" Value="Đã dừng"/>
+                                                            <Setter Property="Foreground" Value="#C62828"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                        <UniformGrid Columns="3">
+                                            <Button Content="▶ Bắt đầu" Style="{StaticResource BigActionButton}" Background="#2E7D32" Command="{Binding StartSystemCommand}"/>
+                                            <Button Content="■ Dừng" Style="{StaticResource BigActionButton}" Background="#C62828" Command="{Binding StopSystemCommand}"/>
+                                            <Button Content="↻ Reset" Style="{StaticResource BigActionButton}" Background="#607D8B" Command="{Binding ResetSystemCommand}"/>
+                                        </UniformGrid>
+
+                                        <!-- "Recipe start" (mục 7) — chọn và chạy 1 Recipe ngay tại Tổng quan, không cần sang tab Công thức trước -->
+                                        <TextBlock Text="Recipe" FontSize="11" Foreground="#777" Margin="0,10,0,0"/>
+                                        <Button Content="▶ Recipe start" Style="{StaticResource BigActionButton}" Background="#6A1B9A"
+                                            Command="{Binding OpenRecipeStartPopupCommand}" Margin="0,2,0,0"/>
+
+                                        <!-- "Process change" / "Process monitor" (mục 8) — Process change hiện dãy nút can thiệp
+                                         Start/Pause/Skip/Reset vào Recipe đang chạy; Process monitor ẩn dãy nút đó, chỉ xem. -->
+                                        <TextBlock Text="Tiến trình Recipe" FontSize="11" Foreground="#777" Margin="0,10,0,0"/>
+                                        <UniformGrid Columns="2" Margin="0,2,0,0">
+                                            <Button Content="Process change" Style="{StaticResource BigActionButton}" Background="#5D4037"
+                                                Command="{Binding ShowProcessChangeCommand}"/>
+                                            <Button Content="Process monitor" Style="{StaticResource BigActionButton}" Background="#607D8B"
+                                                Command="{Binding ShowProcessMonitorCommand}"/>
+                                        </UniformGrid>
+
+                                        <UniformGrid Columns="4" Margin="0,6,0,0"
+                                                 Visibility="{Binding IsProcessControlVisible, Converter={StaticResource BoolToVis}}">
+                                            <Button Content="▶ Start" Padding="4,6" Margin="2" Background="#2E7D32" Foreground="White"
+                                                Command="{Binding RunRecipeCommand}"/>
+                                            <Button Content="{Binding PauseResumeButtonText}" Padding="4,6" Margin="2" Background="#F57F17" Foreground="White"
+                                                Command="{Binding PauseResumeRecipeCommand}"/>
+                                            <Button Content="⏭ Skip" Padding="4,6" Margin="2" Background="#1565C0" Foreground="White"
+                                                Command="{Binding SkipCurrentStepCommand}"/>
+                                            <Button Content="↻ Reset" Padding="4,6" Margin="2" Background="#C62828" Foreground="White"
+                                                Command="{Binding ResetRecipeProgressCommand}"/>
+                                        </UniformGrid>
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource CardStyle}">
+                                    <StackPanel>
+                                        <Border Style="{StaticResource CardHeaderStyle}">
+                                            <TextBlock Text="Điều khiển robot" Style="{StaticResource CardHeaderText}"/>
+                                        </Border>
+                                        <UniformGrid Columns="2">
+                                            <Button Content="Gắp" Style="{StaticResource BigActionButton}" Background="#1565C0" Command="{Binding RobotGripCommand}"/>
+                                            <Button Content="Đặt OK" Style="{StaticResource BigActionButton}" Background="#2E7D32" Command="{Binding RobotPlaceOkCommand}"/>
+                                            <Button Content="Đặt NG" Style="{StaticResource BigActionButton}" Background="#C62828" Command="{Binding RobotPlaceNgCommand}"/>
+                                            <Button Content="⌂ Home" Style="{StaticResource BigActionButton}" Background="#546E7A" Command="{Binding RobotHomeCommand}"/>
+                                        </UniformGrid>
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource CardStyle}">
+                                    <StackPanel>
+                                        <Border Style="{StaticResource CardHeaderStyle}">
+                                            <TextBlock Text="Điều khiển băng tải" Style="{StaticResource CardHeaderText}"/>
+                                        </Border>
+                                        <UniformGrid Columns="2" Margin="0,0,0,8">
+                                            <Button Content="▶ Chạy" Style="{StaticResource BigActionButton}" Background="#2E7D32" Command="{Binding ConveyorRunCommand}"/>
+                                            <Button Content="■ Dừng" Style="{StaticResource BigActionButton}" Background="#C62828" Command="{Binding ConveyorStopCommand}"/>
+                                        </UniformGrid>
+                                        <TextBlock Text="Tốc độ (%)" FontSize="11" Foreground="#777"/>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Slider Minimum="0" Maximum="100" Value="{Binding ConveyorSpeedPercent}"
+                                                VerticalAlignment="Center" TickFrequency="10" IsSnapToTickEnabled="True"/>
+                                            <TextBlock Grid.Column="1" Text="{Binding ConveyorSpeedPercent, StringFormat=' {0:0}%'}"
+                                                   VerticalAlignment="Center" FontWeight="Bold" Margin="6,0,0,0"/>
+                                        </Grid>
+                                        <Button Content="Áp dụng tốc độ" HorizontalAlignment="Right" Margin="0,6,0,0"
+                                            Padding="8,3" Command="{Binding ApplyConveyorSpeedCommand}"/>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </Grid>
+                    </ScrollViewer>
+                </TabItem>
+
+                <!-- ========================================================= TAB: ĐIỀU KHIỂN (Manual I/O chi tiết) ========================================================= -->
+                <TabItem Header="⚙  Điều khiển" Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVis}}">
+                    <DockPanel Margin="10" Background="White">
+                        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6">
+                            <Button Content="+ Thêm điểm I/O" Command="{Binding AddIoPointCommand}" Padding="8,2"/>
+                            <TextBlock Text="{Binding StatusText}" Foreground="#0B3D66" Margin="16,0,0,0" VerticalAlignment="Center"/>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <Button Content="Connect" Command="{Binding ConnectCommand}" Padding="10,2" Margin="16,0,6,0"/>
+                                <Button Content="Disconnect" Command="{Binding DisconnectCommand}" Padding="10,2"/>
+                            </StackPanel>
+                        </StackPanel>
+                        <DataGrid ItemsSource="{Binding IoPoints}" AutoGenerateColumns="False" CanUserAddRows="False"
+                              HeadersVisibility="Column" RowHeight="28">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Tên" Binding="{Binding Name}" Width="140"/>
+                                <DataGridTextColumn Header="Địa chỉ" Binding="{Binding Address}" Width="90"/>
+                                <DataGridComboBoxColumn Header="Loại" SelectedItemBinding="{Binding Kind}" Width="60"
+                                                     ItemsSource="{Binding Source={StaticResource IoKindValues}}"/>
+                                <DataGridTemplateColumn Header="Giá trị Bit" Width="80">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <CheckBox IsChecked="{Binding BoolValue}" HorizontalAlignment="Center"/>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                                <DataGridTextColumn Header="Giá trị Word" Binding="{Binding WordValue}" Width="90"/>
+                                <DataGridTextColumn Header="Scale" Binding="{Binding Scale}" Width="60"/>
+                                <DataGridCheckBoxColumn Header="Auto Poll" Binding="{Binding AutoPoll}" Width="70"/>
+                                <DataGridTemplateColumn Header="Thao tác" Width="150">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Orientation="Horizontal">
+                                                <Button Content="Read" Padding="6,1" Margin="0,0,4,0"
+                                                    Command="{Binding DataContext.ReadIoPointCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                    CommandParameter="{Binding}"/>
+                                                <Button Content="Write" Padding="6,1" Margin="0,0,4,0"
+                                                    Command="{Binding DataContext.WriteIoPointCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                    CommandParameter="{Binding}"/>
+                                                <Button Content="✕" Padding="6,1"
+                                                    Command="{Binding DataContext.RemoveIoPointCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                    CommandParameter="{Binding}"/>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                                <DataGridTextColumn Header="Trạng thái" Binding="{Binding StatusText}" Width="*" IsReadOnly="True"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </DockPanel>
+                </TabItem>
+
+                <!-- ========================================================= TAB: CÔNG THỨC (Recipe) ========================================================= -->
+                <!-- ========================================================= TAB: CÔNG THỨC (thư viện Recipe — giống màn hình chọn Recipe của CoreApp) ========================================================= -->
+                <TabItem Header="📄  Công thức">
+                    <Grid Margin="10" Background="White">
+
+                        <!-- ===== MÀN DANH SÁCH (mặc định) — Create new/Edit/Copy/Paste/Delete/Import/Export ===== -->
+                        <DockPanel Visibility="{Binding IsRecipeListView, Converter={StaticResource BoolToVis}}">
+                            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,10">
+                                <Button Content="＋ Create new" Command="{Binding CreateNewRecipeCommand}" Padding="10,4" Margin="0,0,6,0"/>
+                                <Button Content="✎ Edit" Padding="10,4" Margin="0,0,6,0"
+                                    Command="{Binding EditRecipeCommand}" CommandParameter="{Binding SelectedLibraryRecipe}"/>
+                                <Button Content="⧉ Copy" Padding="10,4" Margin="0,0,6,0"
+                                    Command="{Binding CopyRecipeCommand}" CommandParameter="{Binding SelectedLibraryRecipe}"/>
+                                <Button Content="📋 Paste" Command="{Binding PasteRecipeCommand}" Padding="10,4" Margin="0,0,6,0"/>
+                                <Button Content="🗑 Delete" Padding="10,4" Margin="0,0,16,0"
+                                    Command="{Binding DeleteRecipeCommand}" CommandParameter="{Binding SelectedLibraryRecipe}"/>
+                                <Button Content="⇩ Import" Command="{Binding ImportRecipeCommand}" Padding="10,4" Margin="0,0,6,0"/>
+                                <Button Content="⇧ Export" Padding="10,4" Margin="0,0,6,0"
+                                    Command="{Binding ExportRecipeCommand}" CommandParameter="{Binding SelectedLibraryRecipe}"/>
+                                <Button Content="🔄 Làm mới" Command="{Binding RefreshRecipeLibraryCommand}" Padding="10,4"/>
+                            </StackPanel>
+
+                            <DataGrid ItemsSource="{Binding RecipeLibrary}" SelectedItem="{Binding SelectedLibraryRecipe}"
+                                  AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True"
+                                  HeadersVisibility="Column" RowHeight="28" SelectionMode="Single">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="No." Binding="{Binding No}" Width="45"/>
+                                    <DataGridTextColumn Header="Tên Recipe" Binding="{Binding Name}" Width="200"/>
+                                    <DataGridTextColumn Header="Số bước" Binding="{Binding StepCount}" Width="70"/>
+                                    <DataGridTextColumn Header="Sửa lần cuối" Binding="{Binding ModifiedAt, StringFormat='HH:mm:ss dd/MM/yyyy'}" Width="140"/>
+                                    <DataGridTemplateColumn Header="" Width="60">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <Button Content="✎ Edit" Padding="6,1"
+                                                    Command="{Binding DataContext.EditRecipeCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                    CommandParameter="{Binding}"/>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </DockPanel>
+
+                        <!-- ===== MÀN EDIT (sửa từng Step của 1 Recipe) — Back quay về danh sách ===== -->
+                        <DockPanel Visibility="{Binding IsRecipeEditView, Converter={StaticResource BoolToVis}}">
+                            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6">
+                                <Button Content="← Back" Command="{Binding BackToRecipeListCommand}" Padding="10,2" Margin="0,0,12,0"/>
+                                <TextBlock Text="Tên Recipe:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                <TextBox Text="{Binding RecipeName, UpdateSourceTrigger=PropertyChanged}" Width="160" Margin="0,0,12,0"/>
+                                <Button Content="+ Thêm bước" Command="{Binding AddRecipeStepCommand}" Padding="8,2" Margin="0,0,6,0"/>
+                                <Button Content="💾 Save" Command="{Binding SaveRecipeCommand}" Padding="8,2" Margin="0,0,12,0"/>
+                                <Button Content="▶ Run" Command="{Binding RunRecipeCommand}" Padding="10,2" Margin="0,0,6,0"/>
+                                <Button Content="■ Stop" Command="{Binding StopRecipeCommand}" Padding="10,2"/>
+                            </StackPanel>
+                            <DataGrid ItemsSource="{Binding RecipeSteps}" AutoGenerateColumns="False" CanUserAddRows="False"
+                                  HeadersVisibility="Column" RowHeight="28">
+                                <DataGrid.RowStyle>
+                                    <Style TargetType="DataGridRow">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsCurrent}" Value="True">
+                                                <Setter Property="Background" Value="#C8E6C9"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </DataGrid.RowStyle>
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="#" Binding="{Binding Order}" Width="30" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="Mô tả" Binding="{Binding Description}" Width="160"/>
+                                    <DataGridTextColumn Header="Địa chỉ" Binding="{Binding Address}" Width="80"/>
+                                    <DataGridComboBoxColumn Header="Loại" SelectedItemBinding="{Binding Kind}" Width="60"
+                                                         ItemsSource="{Binding Source={StaticResource IoKindValues}}"/>
+                                    <DataGridCheckBoxColumn Header="Wait?" Binding="{Binding IsWaitStep}" Width="50"/>
+                                    <DataGridTextColumn Header="Giá trị" Binding="{Binding Value}" Width="70"/>
+                                    <DataGridTextColumn Header="Scale" Binding="{Binding Scale}" Width="55"/>
+                                    <DataGridTextColumn Header="Delay sau (ms)" Binding="{Binding DelayAfterMs}" Width="90"/>
+                                    <DataGridTextColumn Header="Timeout Wait (ms)" Binding="{Binding WaitTimeoutMs}" Width="100"/>
+                                    <DataGridTemplateColumn Header="" Width="40">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <Button Content="✕" Padding="6,1"
+                                                    Command="{Binding DataContext.RemoveRecipeStepCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                    CommandParameter="{Binding}"/>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </DockPanel>
+                    </Grid>
+                </TabItem>
+
+                <!-- ========================================================= TAB: BÁO CÁO (đọc thật từ MES/DB) ========================================================= -->
+                <TabItem Header="📊  Báo cáo">
+                    <DockPanel Margin="16" Background="White">
+                        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,12">
+                            <TextBlock Text="Báo cáo sản xuất hôm nay" FontSize="16" FontWeight="Bold" VerticalAlignment="Center"/>
+                            <Button Content="🔄 Làm mới" Command="{Binding RefreshReportCommand}" Padding="10,4" Margin="16,0,0,0"/>
+                            <TextBlock Text="Đang tải..." Foreground="#1565C0" Margin="12,0,0,0" VerticalAlignment="Center"
+                                   Visibility="{Binding IsLoadingReport, Converter={StaticResource BoolToVis}}"/>
+                        </StackPanel>
+
+                        <UniformGrid DockPanel.Dock="Top" Columns="3" Height="90" Margin="0,0,0,16">
+                            <Border Background="#0B3D66" CornerRadius="4" Margin="0,0,8,0">
+                                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                    <TextBlock Text="Tổng số (MES/DB)" Foreground="#AFC6DE" FontSize="11" HorizontalAlignment="Center"/>
+                                    <TextBlock Text="{Binding ReportTotalCount}" Foreground="White" FontSize="26" FontWeight="Bold" HorizontalAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
+                            <Border Background="#2E7D32" CornerRadius="4" Margin="4,0">
+                                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                    <TextBlock Text="OK" Foreground="White" FontSize="11" HorizontalAlignment="Center"/>
+                                    <TextBlock Text="{Binding ReportOkCount}" Foreground="White" FontSize="26" FontWeight="Bold" HorizontalAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
+                            <Border Background="#C62828" CornerRadius="4" Margin="8,0,0,0">
+                                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                    <TextBlock Text="NG" Foreground="White" FontSize="11" HorizontalAlignment="Center"/>
+                                    <TextBlock Text="{Binding ReportNgCount}" Foreground="White" FontSize="26" FontWeight="Bold" HorizontalAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
+                        </UniformGrid>
+
+                        <TextBlock DockPanel.Dock="Top" Text="Lịch sử thao tác (đọc trực tiếp từ MES/DB — 50 dòng gần nhất):"
+                               FontWeight="Bold" Margin="0,0,0,6"/>
+                        <DataGrid ItemsSource="{Binding ReportRecentActivity}" AutoGenerateColumns="False" IsReadOnly="True"
+                              HeadersVisibility="Column" RowHeight="26">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Id" Binding="{Binding Id}" Width="60"/>
+                                <DataGridTextColumn Header="Thời gian" Binding="{Binding Timestamp, StringFormat='HH:mm:ss dd/MM'}" Width="120"/>
+                                <DataGridTextColumn Header="Sự kiện" Binding="{Binding EventText}" Width="*"/>
+                                <DataGridTextColumn Header="Kết quả" Binding="{Binding Result}" Width="70"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </DockPanel>
+                </TabItem>
+
+                <!-- ========================================================= TAB: LỊCH SỬ (Operation history / Alarm history) ========================================================= -->
+                <TabItem Header="🕒  Lịch sử">
+                    <Grid Margin="10" Background="White">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <!-- Hàng nút chuyển Operation/Alarm history -->
+                            <RowDefinition Height="*"/>
+                            <!-- Nội dung bảng (1 trong 2, theo IsAlarmHistoryActive) -->
+                            <RowDefinition Height="Auto"/>
+                            <!-- Hàng "Thêm luật" — ĐÃ DỊCH XUỐNG DƯỚI theo yêu cầu -->
+                            <RowDefinition Height="120"/>
+                            <!-- Bảng luật cảnh báo (cấu hình) -->
+                        </Grid.RowDefinitions>
+
+                        <!-- Hàng nút chuyển đổi 2 chế độ xem, đặt NGANG theo đúng yêu cầu. Nút đang được chọn tô đậm viền
+                         bằng DataTrigger (so sánh trực tiếp với thuộc tính bool trên ViewModel) — không cần converter riêng. -->
+                        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+                            <Button Content="Operation history" Command="{Binding ShowOperationHistoryCommand}" Padding="10,4" Margin="0,0,8,0">
+                                <Button.Style>
+                                    <Style TargetType="Button">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsOperationHistoryActive}" Value="True">
+                                                <Setter Property="FontWeight" Value="Bold"/>
+                                                <Setter Property="BorderBrush" Value="#1565C0"/>
+                                                <Setter Property="BorderThickness" Value="2"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Button.Style>
+                            </Button>
+                            <Button Content="Alarm history" Command="{Binding ShowAlarmHistoryCommand}" Padding="10,4">
+                                <Button.Style>
+                                    <Style TargetType="Button">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsAlarmHistoryActive}" Value="True">
+                                                <Setter Property="FontWeight" Value="Bold"/>
+                                                <Setter Property="BorderBrush" Value="#1565C0"/>
+                                                <Setter Property="BorderThickness" Value="2"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Button.Style>
+                            </Button>
+                        </StackPanel>
+
+                        <!-- ===== Bảng OPERATION HISTORY (lịch sử chạy Recipe — tương đương 稼働履歴 CoreApp) ===== -->
+                        <DataGrid Grid.Row="1" ItemsSource="{Binding RecipeRunHistory}" AutoGenerateColumns="False"
+                              CanUserAddRows="False" HeadersVisibility="Column" IsReadOnly="True" RowHeight="26"
+                              Visibility="{Binding IsOperationHistoryActive, Converter={StaticResource BoolToVis}}">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="No." Binding="{Binding No}" Width="50"/>
+                                <DataGridTextColumn Header="Recipe No." Binding="{Binding RecipeNo}" Width="80"/>
+                                <DataGridTextColumn Header="Recipe name" Binding="{Binding RecipeName}" Width="140"/>
+                                <DataGridTextColumn Header="Bắt đầu" Binding="{Binding StartTime, StringFormat='HH:mm:ss dd/MM'}" Width="120"/>
+                                <DataGridTextColumn Header="Kết thúc" Binding="{Binding EndTime, StringFormat='HH:mm:ss dd/MM'}" Width="120"/>
+                                <DataGridTextColumn Header="Thời lượng" Binding="{Binding DurationText}" Width="110"/>
+                                <DataGridTextColumn Header="Số bước" Binding="{Binding StepCount}" Width="70"/>
+                                <DataGridTextColumn Header="Kết quả" Binding="{Binding Result}" Width="*"/>
+                            </DataGrid.Columns>
+                            <DataGrid.RowStyle>
+                                <Style TargetType="DataGridRow">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Result}" Value="Error">
+                                            <Setter Property="Background" Value="#FFCDD2"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding Result}" Value="Stopped">
+                                            <Setter Property="Background" Value="#FFE0B2"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </DataGrid.RowStyle>
+                        </DataGrid>
+
+                        <!-- ===== Bảng ALARM HISTORY — đúng 9 cột theo yêu cầu, giống CoreApp ===== -->
+                        <DataGrid Grid.Row="1" ItemsSource="{Binding AlarmLog}" AutoGenerateColumns="False"
+                              CanUserAddRows="False" HeadersVisibility="Column" IsReadOnly="True" RowHeight="26"
+                              Visibility="{Binding IsAlarmHistoryActive, Converter={StaticResource BoolToVis}}">
+                            <DataGrid.RowStyle>
+                                <Style TargetType="DataGridRow">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Acknowledged}" Value="False">
+                                            <Setter Property="Background" Value="#FFCDD2"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </DataGrid.RowStyle>
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="No." Binding="{Binding No}" Width="45"/>
+                                <DataGridTextColumn Header="Alarm No." Binding="{Binding AlarmNo}" Width="70"/>
+                                <DataGridTextColumn Header="Alarm name" Binding="{Binding RuleName}" Width="130"/>
+                                <DataGridTextColumn Header="Recipe name" Binding="{Binding RecipeName}" Width="100"/>
+                                <DataGridTextColumn Header="Thời gian xảy ra" Binding="{Binding Timestamp, StringFormat='HH:mm:ss dd/MM'}" Width="120"/>
+                                <DataGridTextColumn Header="Step No." Binding="{Binding StepNo}" Width="65"/>
+                                <DataGridTextColumn Header="Step name" Binding="{Binding StepName}" Width="110"/>
+                                <DataGridTextColumn Header="Remaining time" Binding="{Binding RemainingTimeText}" Width="110"/>
+                                <DataGridTextColumn Header="Thời gian reset" Binding="{Binding AcknowledgedAt, StringFormat='HH:mm:ss dd/MM'}" Width="120"/>
+                                <DataGridTemplateColumn Header="" Width="60">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <Button Content="ACK" Padding="6,1"
+                                                Command="{Binding DataContext.AckAlarmCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                CommandParameter="{Binding}"/>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                            </DataGrid.Columns>
+                        </DataGrid>
+
+                        <!-- Hàng "Thêm luật" — DỊCH XUỐNG DƯỚI bảng chính theo đúng yêu cầu, chỉ còn là khu cấu hình luật, không chiếm chỗ bảng lịch sử -->
+                        <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,10,0,6">
+                            <TextBlock Text="Luật cảnh báo (theo dõi bit):" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                            <Button Content="+ Thêm luật" Command="{Binding AddAlarmRuleCommand}" Padding="8,2" Margin="0,0,8,0"/>
+                            <Button Content="Xoá các mục Alarm history đã ACK" Command="{Binding ClearAcknowledgedAlarmsCommand}" Padding="8,2"/>
+                        </StackPanel>
+
+                        <DataGrid Grid.Row="3" ItemsSource="{Binding AlarmRules}" AutoGenerateColumns="False"
+                              CanUserAddRows="False" HeadersVisibility="Column" RowHeight="26">
+                            <DataGrid.Columns>
+                                <DataGridCheckBoxColumn Header="Bật" Binding="{Binding IsEnabled}" Width="45"/>
+                                <DataGridTextColumn Header="Tên" Binding="{Binding Name}" Width="140"/>
+                                <DataGridTextColumn Header="Địa chỉ" Binding="{Binding Address}" Width="80"/>
+                                <DataGridCheckBoxColumn Header="Báo khi ON" Binding="{Binding ActiveWhen}" Width="80"/>
+                                <DataGridTextColumn Header="Nội dung" Binding="{Binding Message}" Width="*"/>
+                                <DataGridTemplateColumn Header="" Width="40">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <Button Content="✕" Padding="6,1"
+                                                Command="{Binding DataContext.RemoveAlarmRuleCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                CommandParameter="{Binding}"/>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Grid>
+                </TabItem>
+
+                <!-- ========================================================= TAB: CÀI ĐẶT ========================================================= -->
+                <TabItem Header="🔧  Cài đặt" Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVis}}">
+                    <ScrollViewer Background="White" Padding="16">
+                        <StackPanel MaxWidth="480" HorizontalAlignment="Left">
+                            <TextBlock Text="Địa chỉ PLC dùng cho các nút điều khiển ở tab Tổng quan" FontWeight="Bold" Margin="0,0,0,10"/>
+                            <TextBlock Text="Sửa lại đúng theo bảng địa chỉ I/O thật của máy bạn, bấm Áp dụng để cập nhật." Foreground="#777" FontSize="11" Margin="0,0,0,10" TextWrapping="Wrap"/>
+
+                            <TextBlock Text="Tự động/Bằng tay (giữ trạng thái)" Foreground="#777" FontSize="11"/>
+                            <TextBox Text="{Binding Addresses.AutoModeAddress}" Margin="0,0,0,8"/>
+                            <TextBlock Text="Bắt đầu (xung)" Foreground="#777" FontSize="11"/>
+                            <TextBox Text="{Binding Addresses.StartAddress}" Margin="0,0,0,8"/>
+                            <TextBlock Text="Dừng (xung)" Foreground="#777" FontSize="11"/>
+                            <TextBox Text="{Binding Addresses.StopAddress}" Margin="0,0,0,8"/>
+                            <TextBlock Text="Reset (xung)" Foreground="#777" FontSize="11"/>
+                            <TextBox Text="{Binding Addresses.ResetAddress}" Margin="0,0,0,8"/>
+
+                            <TextBlock Text="Robot: Gắp (xung)" Foreground="#777" FontSize="11"/>
+                            <TextBox Text="{Binding Addresses.RobotGripAddress}" Margin="0,0,0,8"/>
+                            <TextBlock Text="Robot: Đặt OK (xung)" Foreground="#777" FontSize="11"/>
+                            <TextBox Text="{Binding Addresses.RobotPlaceOkAddress}" Margin="0,0,0,8"/>
+                            <TextBlock Text="Robot: Đặt NG (xung)" Foreground="#777" FontSize="11"/>
+                            <TextBox Text="{Binding Addresses.RobotPlaceNgAddress}" Margin="0,0,0,8"/>
+                            <TextBlock Text="Robot: Home (xung)" Foreground="#777" FontSize="11"/>
+                            <TextBox Text="{Binding Addresses.RobotHomeAddress}" Margin="0,0,0,8"/>
+
+                            <TextBlock Text="Băng tải: Dừng (ON=dừng, giữ trạng thái)" Foreground="#777" FontSize="11"/>
+                            <TextBox Text="{Binding Addresses.ConveyorStopAddress}" Margin="0,0,0,8"/>
+                            <TextBlock Text="Băng tải: Tốc độ (Word 0-100%)" Foreground="#777" FontSize="11"/>
+                            <TextBox Text="{Binding Addresses.ConveyorSpeedAddress}" Margin="0,0,0,8"/>
+
+                            <TextBlock Text="Cảm biến: Có sản phẩm (X)" Foreground="#777" FontSize="11"/>
+                            <TextBox Text="{Binding Addresses.SensorHasPartAddress}" Margin="0,0,0,8"/>
+                            <TextBlock Text="Cảm biến: Vị trí gắp (X)" Foreground="#777" FontSize="11"/>
+                            <TextBox Text="{Binding Addresses.SensorGripPositionAddress}" Margin="0,0,0,8"/>
+                            <TextBlock Text="Trigger camera (Y)" Foreground="#777" FontSize="11"/>
+                            <TextBox Text="{Binding Addresses.TriggerCameraAddress}" Margin="0,0,0,8"/>
+
+                            <TextBlock Text="Độ rộng xung mặc định (ms)" Foreground="#777" FontSize="11"/>
+                            <TextBox Text="{Binding Addresses.PulseMs}" Margin="0,0,0,16"/>
+
+                            <Button Content="Áp dụng thay đổi" HorizontalAlignment="Left" Padding="12,4"
+                                Command="{Binding ApplyAddressSettingsCommand}"/>
+
+                            <Separator Margin="0,16"/>
+                            <TextBlock Text="Thông tin mạng (chỉ hiển thị/ghi chú — IP PLC lấy thật từ appsettings.json)" FontWeight="Bold" Margin="0,0,0,10"/>
+                            <TextBlock Text="{Binding ConnectionDescription, StringFormat='IP/Port PLC: {0}'}" Margin="0,0,0,4"/>
+                            <TextBlock Text="IP Camera (mô phỏng)" Foreground="#777" FontSize="11"/>
+                            <TextBox Text="{Binding Addresses.CameraIp}" Margin="0,0,0,8"/>
+                            <TextBlock Text="IP Robot (mô phỏng)" Foreground="#777" FontSize="11"/>
+                            <TextBox Text="{Binding Addresses.RobotIp}" Margin="0,0,0,8"/>
+                            <TextBlock Text="IP PC" Foreground="#777" FontSize="11"/>
+                            <TextBox Text="{Binding Addresses.PcIp}" Margin="0,0,0,8"/>
+                            <TextBlock Text="Subnet Mask" Foreground="#777" FontSize="11"/>
+                            <TextBox Text="{Binding Addresses.SubnetMask}" Margin="0,0,0,8"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <!-- ========================================================= TAB: DATA CHANGE (mới — placeholder) ========================================================= -->
+                <TabItem Header="🗄  Data change" Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVis}}">
+                    <StackPanel Margin="20" Background="White">
+                        <TextBlock Text="Data Change" FontSize="16" FontWeight="Bold" Margin="0,0,0,10"/>
+                        <TextBlock TextWrapping="Wrap" Foreground="#555" Margin="0,0,0,16">
+                        Tương đương màn hình "データ書出し" (xuất/đối chiếu dữ liệu) của CoreApp — nơi Admin/Maintenance
+                        chỉnh trực tiếp các tham số vận hành nhạy cảm (setpoint nhiệt độ, offset cảm biến, thông số an toàn...)
+                        mà người vận hành thường (Guest) không được chạm vào. Khung dưới là chỗ đặt bảng tham số thật khi bạn
+                        cung cấp danh sách cụ thể cần chỉnh ở đây.
+                        </TextBlock>
+                        <Border BorderBrush="#DDE3EA" BorderThickness="1" CornerRadius="4" Padding="16" Background="#FAFBFC">
+                            <TextBlock Text="(Chưa có tham số nào được định nghĩa — cho mình biết danh sách tham số cụ thể cần chỉnh ở đây.)"
+                                   Foreground="#999" FontStyle="Italic"/>
+                        </Border>
+                    </StackPanel>
+                </TabItem>
+
+                <!-- ========================================================= TAB: MAINTENANCE (mới — placeholder, CHỈ Maintenance) ========================================================= -->
+                <TabItem Header="🛠  Maintenance" Visibility="{Binding CanSeeMaintenance, Converter={StaticResource BoolToVis}}">
+                    <StackPanel Margin="20" Background="White">
+                        <TextBlock Text="Maintenance" FontSize="16" FontWeight="Bold" Margin="0,0,0,10"/>
+                        <TextBlock TextWrapping="Wrap" Foreground="#555" Margin="0,0,0,16">
+                        Tương đương nhóm màn hình bảo trì thiết bị của CoreApp (炉心菅交換 = thay ống lò, 装置初期値 = khởi tạo
+                        giá trị mặc định thiết bị...) — các thao tác chỉ kỹ thuật viên bảo trì mới được làm, KHÔNG dành cho
+                        Admin vận hành thường ngày. Đây là lý do Tab này CHỈ hiện khi đăng nhập đúng tài khoản Maintenance,
+                        không hiện với Administrator.
+                        </TextBlock>
+                        <Border BorderBrush="#DDE3EA" BorderThickness="1" CornerRadius="4" Padding="16" Background="#FAFBFC">
+                            <TextBlock Text="(Chưa có nội dung bảo trì cụ thể — cho mình biết các thao tác bảo trì cần có ở đây.)"
+                                   Foreground="#999" FontStyle="Italic"/>
+                        </Border>
+                    </StackPanel>
+                </TabItem>
+            </TabControl>
+        </DockPanel>
+
+        <!-- ============================= OVERLAY ĐĂNG NHẬP ============================= -->
+        <Border Background="#99000000" Visibility="{Binding IsLoginPopupOpen, Converter={StaticResource BoolToVis}}">
+            <Border Background="White" CornerRadius="8" Padding="24" Width="320" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <StackPanel>
+                    <TextBlock Text="Đăng nhập" FontSize="18" FontWeight="Bold" Margin="0,0,0,16"/>
+
+                    <TextBlock Text="Tài khoản" Foreground="#777" FontSize="11"/>
+                    <TextBox Text="{Binding LoginUsername, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,10" Padding="6,4"/>
+
+                    <TextBlock Text="Mật khẩu (đúng 6 chữ số)" Foreground="#777" FontSize="11"/>
+                    <PasswordBox x:Name="LoginPasswordBox" Margin="0,2,0,6" Padding="6,4"
+                             PasswordChanged="LoginPasswordBox_PasswordChanged" MaxLength="6"/>
+
+                    <TextBlock Text="{Binding LoginError}" Foreground="#C62828" FontSize="11" Margin="0,0,0,10" TextWrapping="Wrap"/>
+
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Content="Huỷ" Command="{Binding CancelLoginCommand}" Padding="12,5" Margin="0,0,8,0"/>
+                        <Button Content="Đăng nhập" Command="{Binding SubmitLoginCommand}" Padding="12,5" Background="#1565C0" Foreground="White"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Border>
+
+        <!-- ============================= OVERLAY "RECIPE START" (mục 7) ============================= -->
+        <Border Background="#99000000" Visibility="{Binding IsRecipeStartPopupOpen, Converter={StaticResource BoolToVis}}">
+            <Border Background="White" CornerRadius="8" Padding="24" Width="420" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <StackPanel>
+                    <TextBlock Text="Recipe start" FontSize="18" FontWeight="Bold" Margin="0,0,0,4"/>
+                    <TextBlock Text="Chọn 1 Recipe trong thư viện để bắt đầu chạy ngay (Recipe được tạo/sửa ở tab &quot;Công thức&quot;)."
+                           FontSize="11" Foreground="#777" TextWrapping="Wrap" Margin="0,0,0,12"/>
+
+                    <DataGrid ItemsSource="{Binding RecipeLibrary}" SelectedItem="{Binding SelectedStartRecipe}"
+                          AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True"
+                          HeadersVisibility="Column" RowHeight="26" SelectionMode="Single" Height="180" Margin="0,0,0,12">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="No." Binding="{Binding No}" Width="40"/>
+                            <DataGridTextColumn Header="Tên Recipe" Binding="{Binding Name}" Width="*"/>
+                            <DataGridTextColumn Header="Số bước" Binding="{Binding StepCount}" Width="65"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <TextBlock Text="Chưa có Recipe nào trong thư viện — sang tab &quot;Công thức&quot; bấm Create new trước."
+                           FontSize="11" Foreground="#C62828" TextWrapping="Wrap" Margin="0,-6,0,10"
+                           Visibility="{Binding HasNoRecipesInLibrary, Converter={StaticResource BoolToVis}}"/>
+
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Content="Huỷ" Command="{Binding CancelRecipeStartCommand}" Padding="12,5" Margin="0,0,8,0"/>
+                        <Button Content="▶ Bắt đầu" Command="{Binding ConfirmRecipeStartCommand}" Padding="12,5" Background="#2E7D32" Foreground="White"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Border>
+    </Grid>
+</UserControl>

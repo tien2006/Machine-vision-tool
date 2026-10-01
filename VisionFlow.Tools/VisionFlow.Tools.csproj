@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <PackageReference Include="log4net" Version="3.3.2" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.30.0" />
     <PackageReference Include="Moq" Version="4.20.72" />
     <PackageReference Include="OpenCvSharp4" Version="4.13.0.20260627" />
     <PackageReference Include="OpenCvSharp4.runtime.win" Version="4.13.0.20260627" />
@@ -28,6 +29,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\VisionFlow.Core\VisionFlow.Core.csproj" />
+    <ProjectReference Include="..\VisionFlow.Hardware\VisionFlow.Hardware.csproj" />
   </ItemGroup>
 
 </Project>

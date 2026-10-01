@@ -196,10 +196,14 @@
                                 <CheckBox x:Name="GridCheck" Content="Grid" IsChecked="{Binding ShowPixelGrid, ElementName=Viewer}" VerticalAlignment="Center" Margin="0,0,8,0"/>
                                 <CheckBox x:Name="RulerCheck" Content="Ruler" IsChecked="{Binding ShowRuler, ElementName=Viewer}" VerticalAlignment="Center" Margin="0,0,10,0"/>
                                 <Border Width="1" Height="14" Background="#D0D0D0" Margin="0,0,6,0"/>
+
                                 <TextBlock Text="Zoom" Style="{StaticResource Lbl}" Margin="0,0,4,0"/>
                                 <Slider x:Name="ZoomSlider" Width="90" Minimum="0.05" Maximum="20" Value="1"
                                 VerticalAlignment="Center" ValueChanged="OnZoomSliderChanged"/>
-                                <TextBox x:Name="ZoomText" Text="100%" Width="50" Margin="4,0" IsReadOnly="True" VerticalAlignment="Center"/>
+                                <!-- SỬA: ZoomText đổi từ IsReadOnly="True" sang cho gõ trực tiếp % -->
+                                <TextBox x:Name="ZoomText" Text="100%" Width="50" Margin="4,0" VerticalAlignment="Center"
+                                         LostFocus="OnZoomTextChanged" KeyDown="OnZoomTextKeyDown"/>
+
                                 <Border Width="1" Height="14" Background="#D0D0D0" Margin="6,0"/>
                                 <TextBlock Text="ROI" Style="{StaticResource Lbl}" Margin="0,0,4,0"
                                    Visibility="{Binding HasRoi, Converter={StaticResource BoolToVis}}"/>
@@ -208,6 +212,14 @@
                                 <Slider x:Name="AngleSlider" Width="110" Minimum="-180" Maximum="180" VerticalAlignment="Center"
                                 ValueChanged="OnAngleChanged"
                                 Visibility="{Binding HasRoi, Converter={StaticResource BoolToVis}}"/>
+                                <!-- MỚI: ô nhập góc chính xác bằng số, đồng bộ 2 chiều với AngleSlider -->
+                                <TextBox x:Name="AngleTextBox" Width="46" Margin="4,0,0,0" VerticalAlignment="Center"
+                                         TextAlignment="Right"
+                                         LostFocus="OnAngleTextChanged" KeyDown="OnAngleTextKeyDown"
+                                         Visibility="{Binding HasRoi, Converter={StaticResource BoolToVis}}"/>
+                                <TextBlock Text="°" Style="{StaticResource Lbl}" Margin="1,0,6,0"
+                                   Visibility="{Binding HasRoi, Converter={StaticResource BoolToVis}}"/>
+
                                 <TextBlock Text="(handles: resize • inside: move • outside: draw • ∠: rotate • right-drag: pan • wheel: zoom)" Style="{StaticResource Lbl}" Margin="10,0,0,0"
                                    Visibility="{Binding HasRoi, Converter={StaticResource BoolToVis}}"/>
                                 <TextBlock x:Name="StatusInline" Text="{Binding StatusText}" Style="{StaticResource Lbl}" Margin="10,0,0,0"/>

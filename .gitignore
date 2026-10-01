@@ -41,3 +41,8 @@ obj/
 # =========================
 .DS_Store
 Thumbs.db
+
+# =========================
+# Python / Virtual Environment
+# =========================
+.venv/

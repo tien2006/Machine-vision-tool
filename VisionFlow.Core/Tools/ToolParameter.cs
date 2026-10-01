@@ -39,6 +39,7 @@ public interface IToolParameter
     int Order { get; }       // Thứ tự sắp xếp hiển thị trên bảng tham số[cite: 1]
     IReadOnlyList<string>? Choices { get; } // Danh sách lựa chọn chỉ đọc cho tham số Dropdown[cite: 1]
     ParameterInteraction Interaction { get; } // Loại hình tương tác đồ họa liên kết[cite: 1]
+    string? RoiEnabledWhen { get; } // Tên tham số bool điều khiển hiện/ẩn ROI tương tác này (null = luôn hiện, theo hành vi cũ)
 }
 
 /// <summary>
@@ -55,7 +56,8 @@ public sealed class ToolParameter<T> : IToolParameter // 'sealed' chặn kế th
         string category = "General",
         int order = 0,
         IReadOnlyList<string>? choices = null,
-        ParameterInteraction interaction = ParameterInteraction.None)
+        ParameterInteraction interaction = ParameterInteraction.None,
+        string? roiEnabledWhen = null) // <-- MỚI)
     {
         Name = name;
         DisplayName = displayName ?? name; // Toán tử ?? (null-coalescing): lấy Name nếu displayName bị null[cite: 1]
@@ -67,6 +69,7 @@ public sealed class ToolParameter<T> : IToolParameter // 'sealed' chặn kế th
         Order = order;
         Choices = choices;
         Interaction = interaction;
+        RoiEnabledWhen = roiEnabledWhen;
     }
     public string Name { get; }            // Auto-property chỉ đọc tên hệ thống[cite: 1]
     public string DisplayName { get; }     // Auto-property chỉ đọc tên hiển thị[cite: 1]
@@ -79,6 +82,7 @@ public sealed class ToolParameter<T> : IToolParameter // 'sealed' chặn kế th
     public IReadOnlyList<string>? Choices { get; } // Danh sách tùy chọn định kiểu type-safe T[cite: 1]
     public ParameterInteraction Interaction { get; } // Hình thức tương tác ảnh[cite: 1]
     //public T TypedValue { get; set; }      // Lưu trữ giá trị Type-safe cho các tool con tính toán
+    public string? RoiEnabledWhen { get; } // <-- MỚI
 
 
     // --- Explicit Interface Implementation (Hiện thực giao diện tường minh) ---

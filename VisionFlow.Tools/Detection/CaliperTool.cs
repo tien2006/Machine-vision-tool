@@ -282,48 +282,58 @@ public sealed class CaliperTool : VisionTool
     /// </summary>
     private static double[] ExtractProfile(Mat gray, P2 start, P2 end, double caliperWidth, double filterWidth)
     {
+        // Tính khoảng cách (độ dài theo pixel) giữa điểm bắt đầu và điểm kết thúc của caliper
         double dx = end.X - start.X, dy = end.Y - start.Y;
         double dist = Math.Sqrt(dx * dx + dy * dy);
-        int n = (int)Math.Ceiling(dist);
-        if (n < 2) return Array.Empty<double>();
 
-        // Vector vuông góc đơn vị (dùng để lấy trung bình theo bề ngang CaliperWidth, giúp giảm nhiễu răng cưa)
+        // Số lượng mẫu (pixels) cần lấy dọc theo chiều dài caliper (làm tròn lên để đảm bảo không bỏ sót pixel)
+        int n = (int)Math.Ceiling(dist);
+        if (n < 2) return Array.Empty<double>(); // Nếu chiều dài quá ngắn thì bỏ qua
+
+        // Tính vector đơn vị vuông góc với hướng quét (dùng để lấy trung bình theo bề ngang CaliperWidth, giúp giảm nhiễu răng cưa)
         double nx = -dy / dist, ny = dx / dist;
+
+        // Tính bán kính số mẫu lấy trung bình theo chiều ngang (bề rộng của caliper)
         int halfSamples = Math.Max(0, (int)Math.Round(caliperWidth / 2.0));
 
         var raw = new double[n];
+        // Vòng lặp lấy mẫu mức xám dọc theo chiều dài của caliper tại từng điểm i
         for (int i = 0; i < n; i++)
         {
+            // Tỷ lệ t chạy từ 0.0 đến 1.0 dọc theo đoạn thẳng từ start đến end
             double t = (double)i / (n - 1);
             double cx = start.X + t * dx, cy = start.Y + t * dy;
 
             double sum = 0; int count = 0;
+            // Lấy trung bình cộng mức xám của các điểm phụ nằm song song hai bên (bề ngang caliper)
             for (int k = -halfSamples; k <= halfSamples; k++)
             {
                 double sx = cx + k * nx, sy = cy + k * ny;
-                sum += SampleBilinear(gray, sx, sy);
+                sum += SampleBilinear(gray, sx, sy); // Lấy mẫu mức xám sub-pixel bằng nội suy song tuyến tính
                 count++;
             }
-            raw[i] = sum / Math.Max(1, count); // Trung bình mức xám theo bề ngang caliper tại vị trí i
+            raw[i] = sum / Math.Max(1, count); // Lưu giá trị trung bình mức xám tại vị trí i
         }
 
-        // Làm mịn dọc theo chiều dài bằng box filter đơn giản, độ rộng theo FilterWidth
+        // Làm mịn (Smoothing) profile dọc theo chiều dài bằng bộ lọc trung bình (box filter đơn giản) với độ rộng filterWidth
         int fw = Math.Max(0, (int)Math.Round(filterWidth));
-        if (fw == 0) return raw;
+        if (fw == 0) return raw; // Nếu không cấu hình làm mịn thì trả về mảng thô ban đầu
 
         var smoothed = new double[n];
+        // Vòng lặp duyệt qua từng điểm của mảng thô để tính giá trị làm mịn
         for (int i = 0; i < n; i++)
         {
             double sum = 0; int count = 0;
+            // Cộng dồn các giá trị trong cửa sổ lân cận [-fw, +fw]
             for (int k = -fw; k <= fw; k++)
             {
                 int idx = i + k;
-                if (idx < 0 || idx >= n) continue;
+                if (idx < 0 || idx >= n) continue; // Bỏ qua nếu vượt quá giới hạn mảng
                 sum += raw[idx]; count++;
             }
-            smoothed[i] = sum / count;
+            smoothed[i] = sum / count; // Gán giá trị trung bình sau khi làm mịn vào mảng kết quả
         }
-        return smoothed;
+        return smoothed; // Trả về mảng profile 1D hoàn chỉnh đã được khử nhiễu cả 2 chiều
     }
 
     /// <summary>

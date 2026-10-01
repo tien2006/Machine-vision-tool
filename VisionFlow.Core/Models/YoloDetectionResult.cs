@@ -35,3 +35,6 @@ public sealed class YoloDetectionResult : VisionResult
 /// nâng cấp để giữ sẵn handle VideoCapture đã mở (tránh phải mở lại file mỗi lần Execute).
 /// </summary>
 public readonly record struct VideoSourceRef(string FilePath, int TotalFrames = -1);
+// Thêm ngay cạnh: public readonly record struct VideoSourceRef(string FilePath, int TotalFrames = -1);
+/// <summary>Metadata kỹ thuật của video - dùng để tính toán các phép đo phụ thuộc thời gian (VD: vận tốc vật thể dựa vào FPS).</summary>
+public readonly record struct VideoInfo(int Width, int Height, int TotalFrames, double Fps, TimeSpan Duration);

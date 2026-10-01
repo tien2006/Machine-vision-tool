@@ -127,10 +127,11 @@ public abstract class VisionTool : ITool
     /// <summary>Thêm một tham số cấu hình (người dùng có thể chỉnh sửa trên UI).</summary>
     protected ToolParameter<T> AddParameter<T>(
         string name, T value, string? displayName = null, T? min = default, T? max = default,
-        string category = "General", int order = 0, ParameterInteraction interaction = ParameterInteraction.None)
+        string category = "General", int order = 0, ParameterInteraction interaction = ParameterInteraction.None,
+        string? enabledWhen = null) // <-- MỚI)
     {
         // Khởi tạo tham số với danh sách lựa chọn (choices) mặc định là null
-        var p = new ToolParameter<T>(name, value, displayName, min, max, category, order, choices: null, interaction);
+        var p = new ToolParameter<T>(name, value, displayName, min, max, category, order, choices: null, interaction, enabledWhen);
         _parameters.Add(p);
         return p;
     }

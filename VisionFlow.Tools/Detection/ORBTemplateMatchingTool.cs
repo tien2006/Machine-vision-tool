@@ -1,7 +1,9 @@
-﻿// ==================== Vai trò chính:                Tìm nhiều bản sao (multi-instance) của vật mẫu, bất biến xoay & tỷ lệ, bằng ORB + BFMatcher + RANSAC Homography
+﻿// ==================== Vai trò chính:                So khớp mẫu bất biến xoay + tỷ lệ bằng đặc trưng ORB, tìm được nhiều bản sao cùng lúc
 // ==================== Thành phần / Class tiêu biểu: ORBTemplateMatchingTool
-// ==================== Phụ thuộc vào:                OpenCvSharp (ORB, BFMatcher, Cv2.FindHomography, Cv2.PerspectiveTransform) + Core.Models (TemplateMatchingNCCResult, dùng chung) + Core.Ports + Core.Tools
-// ==================== Pattern / Kỹ thuật nổi bật:   Iterative "peel-off" multi-instance (loại dần keypoint đã dùng) + Lowe's Ratio Test + RANSAC Homography + Lọc hình học (Area/Aspect Ratio)
+// ==================== Phụ thuộc vào:                OpenCvSharp (ORB, BFMatcher, FindHomography)
+// ==================== Pattern / Kỹ thuật nổi bật:   Feature-based matching + RANSAC Homography + kỹ thuật
+//                       "lột dần" (peel-off) để tìm nhiều instance - ĐÃ SỬA lỗi đánh dấu keypoint "đã dùng"
+//                       quá sớm (xem ghi chú "SỬA LỖI" trong OnExecute)
 
 using System;
 using System.Collections.Generic;
@@ -25,13 +27,17 @@ namespace VisionFlow.Tools.Detection;
 /// mỗi vòng lặp tìm ra 1 bản sao thì đánh dấu các keypoint đã dùng để vòng lặp sau không tìm trùng lại.
 /// Quy trình:
 /// 1. Trích ORB keypoints + descriptors cho cả Template và ảnh Scene (chỉ 1 lần duy nhất).
-/// 2. Lặp tối đa MaxInstances lần, mỗi lần:
+/// 2. Lặp tối đa MaxInstances*3 lần, mỗi lần:
 ///    a. Ghép cặp đặc trưng Template vs các keypoint Scene CHƯA bị đánh dấu "đã dùng" (BFMatcher + Lowe's Ratio Test).
 ///    b. Nếu đủ MinMatchCount cặp ghép tốt -> chạy RANSAC ước lượng Homography.
 ///    c. Đếm inlier, tính MatchScore = inlier / goodMatches.
 ///    d. Biến đổi 4 góc Template qua Homography ra toạ độ Scene -> lọc theo Area/Aspect Ratio (Tab Validation).
 ///    e. Nếu hợp lệ và đủ xa các bản sao đã nhận trước đó (MinSeparationRatio) -> ghi nhận là 1 instance mới.
-///    f. Luôn đánh dấu các keypoint Scene vừa là inlier là "đã dùng" (dù chấp nhận hay không) để tránh lặp vô hạn.
+///    f. CHỈ đánh dấu các keypoint Scene là inlier là "đã dùng" khi bản sao đó ĐƯỢC CHẤP NHẬN hoàn toàn
+///       (đã sửa lỗi so với bản trước: bản cũ đánh dấu "đã dùng" ngay sau RANSAC dù bản sao bị loại ở bước
+///       Validation phía sau - khiến các keypoint đúng bị "đốt" oan, làm mất luôn cơ hội tìm lại object ở
+///       vòng lặp kế tiếp trên các vật thể ít đặc trưng/gần ngưỡng MinMatchCount). Vòng lặp vẫn được chặn
+///       trần an toàn bởi maxLoops, không lo lặp vô hạn dù không còn đánh dấu sớm.
 /// 3. Vẽ overlay (khung đa giác + tâm + score, tuỳ chọn vẽ keypoints/matches debug) và xuất kết quả.
 /// </summary>
 [ToolMetadata("ORBTemplateMatching", DisplayName = "ORB Template Matching", Category = "Detection",
@@ -52,7 +58,7 @@ public sealed class ORBTemplateMatchingTool : VisionTool
     private readonly ToolParameter<int> _maxFeatures;      // Số lượng đặc trưng tối đa ORB trích xuất mỗi ảnh
     private readonly ToolParameter<double> _scaleFactor;   // Tỷ lệ giảm kích thước giữa các tầng pyramid
     private readonly ToolParameter<int> _nlevels;          // Số tầng pyramid
-    private readonly ToolParameter<int> _edgeThreshold;    // Khoảng đệm gần biên ảnh không trích feature
+    private readonly ToolParameter<int> _edgeThreshold;    // Khoảng đệm gần biên ảnh không trích feature - LƯU Ý: nếu Template nhỏ hơn ~2xEdgeThreshold, ORB có thể không tìm được keypoint nào
     private readonly ToolParameter<int> _patchSize;        // Kích thước patch tính mô tả BRIEF
     private readonly ToolParameter<int> _fastThreshold;    // Ngưỡng tương phản tối thiểu của FAST detector
 
@@ -140,7 +146,7 @@ public sealed class ORBTemplateMatchingTool : VisionTool
 
         var matches = new List<TemplateMatchInstance>();
         var acceptedCenters = new List<P2>();
-        var usedSceneIdx = new HashSet<int>(); // Các keypoint Scene đã "dùng" (làm inlier ở vòng trước) - loại khỏi vòng tìm kiếm sau
+        var usedSceneIdx = new HashSet<int>(); // Các keypoint Scene đã "dùng" (thuộc 1 bản sao ĐÃ ĐƯỢC CHẤP NHẬN) - loại khỏi vòng tìm kiếm sau
         double templateW = templateGray.Width, templateH = templateGray.Height;
         double minSeparationPx = _minSeparationRatio.Value * templateW;
         double sceneArea = (double)srcGray.Width * srcGray.Height;
@@ -152,6 +158,19 @@ public sealed class ORBTemplateMatchingTool : VisionTool
             Cv2.DrawKeypoints(overlay, kpScene, overlay, new Scalar(120, 120, 120), DrawMatchesFlags.DrawRichKeypoints);
 
         bool canMatch = descTemplate.Rows > 0 && descScene.Rows > 0;
+
+        // ----- SỬA LỖI (chẩn đoán): trước đây không có log nào khi ORB không tìm được keypoint nào -----
+        // -> tool "thất bại trong im lặng" (MatchesCount=0 nhưng không rõ lý do). Thêm log tường minh:
+        // nguyên nhân phổ biến nhất là Template quá nhỏ so với EdgeThreshold (ORB loại bỏ mọi keypoint
+        // nằm trong dải EdgeThreshold pixel quanh biên ảnh), hoặc bề mặt vật thể quá trơn/ít góc cạnh.
+        if (!canMatch)
+        {
+            context.Log($"ORBTemplateMatching: no ORB keypoints found (Template keypoints={descTemplate.Rows}, Scene keypoints={descScene.Rows}). " +
+                        $"Check: Template size ({templateGray.Width}x{templateGray.Height}) vs EdgeThreshold ({_edgeThreshold.Value}) - " +
+                        "if Template is smaller than ~2x EdgeThreshold, reduce EdgeThreshold or use a larger Template. " +
+                        "Also check the object has enough corner-like features - ORB struggles on smooth/plain surfaces.");
+        }
+
         int maxLoops = _maxInstances.Value * 3; // Chặn trần số vòng lặp để tránh lặp vô hạn khi ảnh còn nhiều keypoint nhưng không đủ inlier
 
         for (int loop = 0; canMatch && loop < maxLoops && matches.Count < _maxInstances.Value; loop++)
@@ -163,7 +182,7 @@ public sealed class ORBTemplateMatchingTool : VisionTool
             var goodMatches = knn
                 .Where(m => m.Length == 2 && m[0].Distance < _loweRatio.Value * m[1].Distance)
                 .Select(m => m[0])
-                .Where(m => !usedSceneIdx.Contains(m.TrainIdx)) // Bỏ qua keypoint Scene đã "dùng" ở các bản sao trước
+                .Where(m => !usedSceneIdx.Contains(m.TrainIdx)) // Bỏ qua keypoint Scene đã "dùng" ở các bản sao ĐÃ CHẤP NHẬN trước đó
                 .ToList();
 
             if (goodMatches.Count < _minMatchCount.Value) break; // Không còn đủ match tốt -> hết bản sao để tìm, dừng vòng lặp
@@ -180,19 +199,24 @@ public sealed class ORBTemplateMatchingTool : VisionTool
 
             if (homography.Empty())
             {
-                // Không ước lượng được mô hình hợp lệ -> đánh dấu hết các keypoint đang xét là đã dùng để tránh lặp lại y hệt vòng này
-                foreach (var m in goodMatches) usedSceneIdx.Add(m.TrainIdx);
+                // SỬA LỖI: trước đây có đánh dấu usedSceneIdx cho các match đang xét ở đây, khiến các keypoint
+                // hợp lệ bị loại vĩnh viễn dù bản sao chưa hề được xác nhận. Giờ để nguyên, không đánh dấu gì -
+                // maxLoops vẫn đảm bảo vòng lặp không chạy vô hạn nếu ảnh liên tục cho homography rỗng.
                 continue;
             }
 
+            // SỬA LỖI: chỉ THU THẬP danh sách inlier vào biến tạm, CHƯA ghi vào usedSceneIdx ở đây.
+            // Việc ghi thật sự chỉ xảy ra SAU KHI bản sao vượt qua toàn bộ Validation phía dưới (xem cuối vòng lặp).
+            var inlierTrainIdx = new List<int>();
             int inlierCount = 0;
-            for (int i = 0; i < mask.Rows; i++)
-                if (mask.At<byte>(i, 0) != 0) { inlierCount++; usedSceneIdx.Add(goodMatches[i].TrainIdx); } // Luôn "dùng" các inlier, kể cả nếu sau đó bị loại ở bước Validation
+            int maskRows = mask.Rows;
+            for (int i = 0; i < maskRows; i++)
+                if (mask.At<byte>(i, 0) != 0) { inlierCount++; inlierTrainIdx.Add(goodMatches[i].TrainIdx); }
 
             double matchScore = goodMatches.Count > 0 ? (double)inlierCount / goodMatches.Count : 0.0;
 
             if (inlierCount < _minMatchCount.Value)
-                continue; // Quá ít inlier -> không đủ tin cậy, thử vòng lặp tiếp theo (đã loại bớt keypoint dùng rồi nên sẽ ra kết quả khác)
+                continue; // Quá ít inlier -> không đủ tin cậy. Các keypoint này KHÔNG bị đánh dấu used, vẫn còn cơ hội dùng lại ở vòng lặp sau với tổ hợp match khác
 
             // ----- Bước 2d: Biến đổi 4 góc Template qua Homography ra toạ độ Scene -----
             Point2f[] templateCorners = { new Point2f(0, 0), new Point2f((float)templateW, 0), new Point2f((float)templateW, (float)templateH), new Point2f(0, (float)templateH) };
@@ -223,15 +247,18 @@ public sealed class ORBTemplateMatchingTool : VisionTool
             var rb = new P2(sceneCorners[2].X, sceneCorners[2].Y);
             var lb = new P2(sceneCorners[3].X, sceneCorners[3].Y);
 
+            // ----- Bản sao ĐƯỢC CHẤP NHẬN hoàn toàn - CHỈ TỪ ĐÂY mới đánh dấu các keypoint là "đã dùng" -----
             matches.Add(new TemplateMatchInstance(lt, rt, rb, lb, center, matchScore, angleDeg, matches.Count));
             acceptedCenters.Add(center);
+            foreach (var idx in inlierTrainIdx) usedSceneIdx.Add(idx); // SỬA LỖI: chuyển xuống đây (trước đây nằm ngay sau RANSAC, phía trên)
 
             if (_drawMatches.Value)
             {
                 // Đơn giản hoá: đánh dấu các điểm Scene đã dùng làm inlier cho bản sao này (không vẽ ghép nối 2 ảnh cạnh nhau
                 // để giữ nguyên kích thước ảnh Output, khác với Cv2.DrawMatches chuẩn cần ảnh đôi).
                 Scalar dbgColor = PickDistinctColor(matches.Count - 1);
-                for (int i = 0; i < mask.Rows; i++)
+                int maskRows1 = mask.Rows;
+                for (int i = 0; i < maskRows1; i++)
                     if (mask.At<byte>(i, 0) != 0)
                         Cv2.Circle(overlay, (int)dstPts[i].X, (int)dstPts[i].Y, 2, dbgColor, -1, LineTypes.AntiAlias);
             }
@@ -257,6 +284,12 @@ public sealed class ORBTemplateMatchingTool : VisionTool
                     new Point((int)m.LeftTop.X, (int)m.LeftTop.Y - 6),
                     HersheyFonts.HersheySimplex, 0.45, color, 1, LineTypes.AntiAlias);
             }
+        }
+        else if (matches.Count > 0)
+        {
+            // SỬA LỖI (chẩn đoán): tránh trường hợp người dùng tưởng thuật toán thất bại trong khi thực ra
+            // chỉ là DrawBoundingBoxes đang tắt - MatchesCount vẫn > 0 nhưng ảnh không hiện khung nào.
+            context.Log($"ORBTemplateMatching: found {matches.Count} match(es) but DrawBoundingBoxes is OFF - enable it in the Visualization tab to see the boxes.");
         }
 
         stopwatch.Stop();

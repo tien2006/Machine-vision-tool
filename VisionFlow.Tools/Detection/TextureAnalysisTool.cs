@@ -21,7 +21,7 @@ namespace VisionFlow.Tools.Detection;
 /// 1. Cắt vùng ROI (có thể xoay góc RegionAngle) từ ảnh nguồn - tái dùng đúng kỹ thuật GetRotationMatrix2D +
 ///    WarpAffine + GetRectSubPix đã dùng ở PMAlignTool/RegionSelectorTool.
 /// 2. Lượng tử hoá mức xám ROI từ 256 mức xuống GrayLevels mức (pixel * GrayLevels / 256).
-/// 3. Xây ma trận đồng hiện GLCM: đếm số lần cặp pixel (i,j) cách nhau đúng Distance pixel theo hướng Angle
+/// 3. Xây ma trận đồng hiện GLCM: đếm số lần cặp pixela (i,j) cách nhau đúng Distance pixel theo hướng Angle
 ///    (0/45/90/135 độ) xuất hiện cạnh nhau, dùng phiên bản đối xứng (cộng cả (i,j) và (j,i)) rồi chuẩn hoá thành xác suất.
 /// 4. Tính 5 đặc trưng kinh điển từ GLCM: Contrast, Correlation, Energy (ASM), Homogeneity (IDM), Entropy.
 /// 5. Tính thêm thống kê cơ bản (MeanGrayLevel, StandardDeviation) trực tiếp trên ROI gốc (chưa lượng tử hoá).

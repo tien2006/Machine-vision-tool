@@ -2,6 +2,7 @@
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Threading;
 using System.Windows;
 using System.Windows.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -17,8 +18,10 @@ using VisionFlow.Core.Tools;
 using VisionFlow.Editor.Adapter;
 using VisionFlow.Engine.Execution;
 using VisionFlow.Engine.Persistence;
+using VisionFlow.Engine.Runtime;
 using VisionFlow.Editor.ViewModels;
 using DynamicData;
+using VisionFlow.Hardware.Plc;
 
 namespace VisionFlow.Editor.ViewModels;
 
@@ -31,6 +34,12 @@ public sealed partial class FlowEditorViewModel : ObservableObject
     private readonly ToolRegistry _registry;    // Khởi tạo danh sách các công cụ xử lý ảnh có sẵn (ToolRegistry) và sắp xếp theo danh mục.
     private readonly IFlowRepository _repository;
     private readonly FlowExecutor _executor = new();
+    private readonly InspectionService _inspection; // Chạy flow ở chế độ máy (graph riêng, không dùng canvas)
+    private readonly PlcLinkHost _plc;
+    private readonly PlcHandshakeHost _handshake;
+    private readonly SynchronizationContext? _ui = SynchronizationContext.Current; // đưa sự kiện từ thread nền về UI
+    private readonly PcControlViewModel _pcControl;
+    public PcControlViewModel PcControl => _pcControl;   // <-- XAML cần dòng này để bind {Binding PcControl}
 
     private double _nextX = 40;
     private double _nextY = 40;
@@ -77,10 +86,36 @@ public sealed partial class FlowEditorViewModel : ObservableObject
     /// </summary>
     /// <param name="registry">Kho lưu trữ và khởi tạo các ToolDescriptor</param>
     /// <param name="repository">Dịch vụ lưu/đọc cấu hình Flow</param>
-    public FlowEditorViewModel(ToolRegistry registry, IFlowRepository repository)
+    public FlowEditorViewModel(ToolRegistry registry, IFlowRepository repository, 
+        InspectionService inspection, PlcLinkHost plc, PlcHandshakeHost handshake, PcControlViewModel pcControl)
     {
         _registry = registry;       // registry (ToolRegistry): Kho lưu trữ danh sách và khởi tạo các loại Tool xử lý ảnh.
         _repository = repository;   // repository (IFlowRepository): Dịch vụ đọc/ghi file cấu hình luồng xử lý (JSON).
+        _inspection = inspection;   // THÊM
+        _plc = plc;
+        _handshake = handshake;
+        _pcControl = pcControl;
+        // Mọi lần kiểm tra xong (dù do bấm Run Inspection tay hay do PLC tự trigger qua handshake)
+        // đều tự động đẩy xuống MES/DB qua PcControl — chỉ đăng ký 1 chỗ duy nhất này.
+        _inspection.InspectionCompleted += result =>
+        {
+            if (result.HasError) return; // Flow lỗi -> không ghi dữ liệu rác vào MES
+
+            double Slot(int n) => result.Values.FirstOrDefault(v => v.Slot == n)?.Value ?? 0;
+
+            // InspectionCompleted bắn trên thread nền -> phải quay lại UI thread trước khi đụng vào
+            // ObservableProperty/ObservableCollection của PcControlViewModel.
+            System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+                _pcControl.ReportInspectionResult(result.IsOk, Slot(1), Slot(2), Slot(3)));
+        };
+        if (_handshake.Service is { } hs)
+        {
+            hs.StateChanged += _ => PostHandshakeSummary();
+            hs.CycleCompleted += _ => PostHandshakeSummary();
+            hs.Log += line => System.Diagnostics.Debug.WriteLine("[HS] " + line); // xem ở cửa sổ Output của VS
+        }
+        if (_handshake.Ladder is { } ladder)
+            ladder.Log += line => System.Diagnostics.Debug.WriteLine(line);
 
         // Dựng danh sách Palette sắp xếp theo Nhóm (Category) rồi đến Tên (DisplayName)
         Palette = new ObservableCollection<ToolDescriptor>(
@@ -275,6 +310,87 @@ public sealed partial class FlowEditorViewModel : ObservableObject
         }
 
         UpdatePreview();
+    }
+
+    /// <summary>Chọn file flow JSON rồi nạp vào InspectionService (graph riêng, tách khỏi canvas).</summary>
+    [RelayCommand]
+    private async Task LoadInspectionFlow()
+    {
+        var dialog = new OpenFileDialog { Filter = "VisionFlow (*.json)|*.json" };
+        if (dialog.ShowDialog() != true) return;
+        await LoadInspectionFlowFromAsync(dialog.FileName);
+    }
+
+    private async Task<bool> LoadInspectionFlowFromAsync(string path)
+    {
+        try
+        {
+            await _inspection.LoadFlowAsync(path);
+            StatusText = $"Inspection flow loaded: {path}";
+            return true;
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Không nạp được inspection flow: {ex.Message}";
+            return false;
+        }
+    }
+
+    /// <summary>Chạy 1 lần kiểm tra; chưa nạp flow thì tự hỏi file. Kết quả hiện ở thanh trạng thái + bảng Timings.</summary>
+    [RelayCommand]
+    private async Task RunInspection()
+    {
+        if (!_inspection.IsLoaded)
+        {
+            var dialog = new OpenFileDialog { Filter = "VisionFlow (*.json)|*.json" };
+            if (dialog.ShowDialog() != true) return;
+            if (!await LoadInspectionFlowFromAsync(dialog.FileName)) return;
+        }
+
+        StatusText = "Running inspection...";
+        try
+        {
+            var result = await _inspection.RunOnceAsync();
+            Timings.Clear();
+            foreach (var n in result.Nodes) Timings.Add(n);
+            StatusText = result.Summary;
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Inspection error: {ex.Message}";
+        }
+    }
+
+    /// <summary>Thử đường truyền PLC: kết nối, đọc, (tuỳ chọn) ghi thử, đo thời gian phản hồi.</summary>
+    [RelayCommand]
+    private async Task TestPlc()
+    {
+        StatusText = "Testing PLC...";
+        var result = await PlcSelfTest.RunAsync(_plc);
+        StatusText = result.Summary;
+    }
+
+    private void PostHandshakeSummary()
+    {
+        var svc = _handshake.Service;
+        if (svc is null) return;
+        var s = svc.Stats;
+        string text = $"PLC Handshake [{svc.State}] | Trigger {s.Triggers}  OK {s.Ok}  NG {s.Ng}  Lỗi {s.Errors}  Mất kết nối {s.LinkFailures}";
+        _ui?.Post(_ => StatusText = text, null);
+    }
+
+    [RelayCommand]
+    private void StartHandshake()
+    {
+        try { _handshake.Start(); StatusText = $"PLC Handshake: đã bắt đầu ({_plc.Description})"; }
+        catch (Exception ex) { StatusText = $"Không bắt đầu được handshake: {ex.Message}"; }
+    }
+
+    [RelayCommand]
+    private async Task StopHandshake()
+    {
+        await _handshake.StopAsync();
+        StatusText = "PLC Handshake: đã dừng";
     }
 
     /// <summary>

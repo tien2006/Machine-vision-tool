@@ -119,7 +119,7 @@ public sealed class ObjectDetectionEngineTool : VisionTool, IDisposable
         _inputSource = AddChoiceParameter("InputSource", "Auto", new[] { "Auto", "Image", "Video" }, "Input Source", category: "Source", order: 1);
         _videoFrameIndex = AddParameter<int>("VideoFrameIndex", 0, "Video Frame Index", min: 0, max: 1_000_000, category: "Source", order: 2);
 
-        _modelName = AddParameter<string>("ModelName", "yolo11n.onnx", "Model Name", category: "Detection", order: 1);
+        _modelName = AddParameter<string>("ModelPath", "yolo11n.onnx", "Model Path", category: "Detection", order: 1);
         _confidenceThreshold = AddParameter<double>("ConfidenceThreshold", 0.5, "Confidence Threshold", min: 0.0, max: 1.0, category: "Detection", order: 2);
         _iouThreshold = AddParameter<double>("IoUThreshold", 0.45, "IoU Threshold", min: 0.0, max: 1.0, category: "Detection", order: 3);
         _maxDetections = AddParameter<int>("MaxDetections", 300, "Max Detections", min: 1, max: 5000, category: "Detection", order: 4);

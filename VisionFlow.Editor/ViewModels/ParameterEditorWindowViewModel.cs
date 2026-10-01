@@ -47,6 +47,7 @@ namespace VisionFlow.Editor.ViewModels // Định nghĩa không gian tên chứa
         private readonly FlowNode _node; // Lưu trữ đối tượng node đang được chỉnh sửa
         private readonly FlowExecutor _executor = new(); // Trình thực thi chạy thử node/đồ thị
         private readonly IToolParameter? _roiParam; // Tham số lưu trữ thông tin ROI (nếu node có hỗ trợ)
+        private readonly IToolParameter? _roiEnableParam; // <-- MỚI: tham số bool bật/tắt ROI (nếu _roiParam có khai báo RoiEnabledWhen)
         private readonly DispatcherTimer _debounce; // Bộ đếm thời gian trì hoãn (debounce) chống spam lệnh thực thi khi nhập liên tục
 
         private readonly Dictionary<string, object?> _original; // Từ điển lưu trữ giá trị tham số ban đầu để phục hồi khi ấn Cancel
@@ -96,16 +97,23 @@ namespace VisionFlow.Editor.ViewModels // Định nghĩa không gian tên chứa
                     // Việc dùng nameof(...) giúp code an toàn, tránh lỗi gõ sai chuỗi chữ ("Value").
                             or nameof(ParameterEditorViewModel.NumericValue)) // Hoặc NumericValue
                         RequestRun(); // Tự động yêu cầu chạy lại node - Kích hoạt bộ đếm thời gian (Debounce)
-                        // Hàm này chưa chạy thuật toán ngay, mà sẽ khởi động bộ đếm _debounce (chờ 180ms).
-                        // Lợi ích cực lớn: Nếu bạn kéo thanh trượt Slider liên tục từ 1 đến 100, sự kiện này sẽ bắn ra hàng trăm lần.
-                        // Nhờ RequestRun() + Debounce, chương trình sẽ đợi bạn dừng kéo chuột 180ms rồi mới chạy thuật toán 1 lần
-                        // duy nhất, giúp UI không bị giật lag!
+                                      // Hàm này chưa chạy thuật toán ngay, mà sẽ khởi động bộ đếm _debounce (chờ 180ms).
+                                      // Lợi ích cực lớn: Nếu bạn kéo thanh trượt Slider liên tục từ 1 đến 100, sự kiện này sẽ bắn ra hàng trăm lần.
+                                      // Nhờ RequestRun() + Debounce, chương trình sẽ đợi bạn dừng kéo chuột 180ms rồi mới chạy thuật toán 1 lần
+                                      // duy nhất, giúp UI không bị giật lag!
+
+                    // MỚI: nếu vừa đổi đúng tham số bật/tắt ROI -> báo UI vẽ lại khung ROI ngay, không cần chờ Run xong
+                    if (item.SystemName == _roiParam?.RoiEnabledWhen)
+                        OnPropertyChanged(nameof(HasRoi));
                 };
 
             _roiParam = node.Tool.Parameters.FirstOrDefault(p =>     // Tìm tham số đầu tiên đóng vai trò tương tác ROI hình chữ nhật xoay, hình tròn hoặc Template
                  p.Interaction is ParameterInteraction.RotatedRectRegion
                                 or ParameterInteraction.CircleRegion
                                 or ParameterInteraction.Template); // Thêm Template để PMAlignt cũng được vẽ ROI tương tác
+            _roiEnableParam = _roiParam?.RoiEnabledWhen is { } enName // <-- MỚI
+                ? node.Tool.Parameters.FirstOrDefault(p => p.Name == enName)
+                : null;
             _original = node.Tool.Parameters.ToDictionary(p => p.Name, p => p.Value); // Sao lưu giá trị ban đầu của tất cả tham số vào Dictionary
 
             _debounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(180) }; // Đặt thời gian chờ trì hoãn debounce là 180ms
@@ -129,7 +137,8 @@ namespace VisionFlow.Editor.ViewModels // Định nghĩa không gian tên chứa
         /// <summary>JSON của toàn bộ output port của node (hiển thị ở tab "Data Output").</summary>
         [ObservableProperty] private string _outputJson = "{}"; // Thuộc tính lưu trữ chuỗi định dạng JSON kết quả các cổng ra
 
-        public bool HasRoi => _roiParam is not null; // Kiểm tra node này có cấu hình tham số ROI hay không
+        public bool HasRoi => _roiParam is not null // Kiểm tra node này có cấu hình tham số ROI hay không
+            && (_roiEnableParam is null || _roiEnableParam.Value is not false); // false rõ ràng mới ẩn; null/true/kiểu khác vẫn coi là bật (an toàn ngược)
 
         /// <summary>Loại ROI cần vẽ trên ảnh: chữ nhật xoay hay hình tròn.</summary>
         public EditorRoiKind RoiKind => _roiParam?.Interaction switch // Xác định loại hình vẽ ROI dựa theo loại tương tác của tham số

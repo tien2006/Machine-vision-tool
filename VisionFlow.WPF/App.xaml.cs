@@ -5,10 +5,14 @@ using System.Windows;
 using VisionFlow.Core.Registry;
 using VisionFlow.Editor.ViewModels;
 using VisionFlow.Engine.Persistence;
+using VisionFlow.Hardware.Camera;
 using VisionFlow.Tools.Acquisition;
 using VisionFlow.Tools.Finding;
 using VisionFlow.Tools.Preprocess;
-using static System.Runtime.InteropServices.JavaScript.JSType;
+using VisionFlow.Engine.Runtime;
+using VisionFlow.Hardware.Plc;
+using VisionFlow.Core.Data;
+using VisionFlow.Mes;
 
 namespace VisionFlow.WPF;
 
@@ -66,6 +70,30 @@ public partial class App : Application
         //      Quản lý vòng đời (Singleton/Transient) của các đối tượng đó.
         //      Tự động dọn dẹp bộ nhớ khi gọi _provider.Dispose().
 
+        // ---- CAMERA: nạp appsettings.json -> tạo camera -> đăng ký vào CameraHub ----
+        // Phải resolve CameraBootstrapper 1 lần ở đây: Singleton của MS DI là LAZY,
+        // nếu không ai resolve thì camera KHÔNG BAO GIỜ được tạo và tool "Camera Source" sẽ không tìm thấy camera.
+        var cameras = _provider.GetRequiredService<CameraBootstrapper>();
+        if (cameras.Errors.Count > 0) // Báo lỗi cấu hình ngay lúc khởi động, không để camera "biến mất" âm thầm
+            MessageBox.Show(string.Join("\n", cameras.Errors), "Cảnh báo cấu hình camera",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+
+        var plc = _provider.GetRequiredService<PlcLinkHost>(); // Singleton lazy: phải resolve để PLC giả được khởi động
+        if (plc.Errors.Count > 0)
+            MessageBox.Show(string.Join("\n", plc.Errors), "Cảnh báo cấu hình PLC",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        VisionFlow.Hardware.Plc.PlcHub.Register(plc);   // <-- THÊM DÒNG NÀY
+
+        var handshake = _provider.GetRequiredService<PlcHandshakeHost>();
+        if (handshake.Errors.Count > 0)
+            MessageBox.Show(string.Join("\n", handshake.Errors), "Cảnh báo cấu hình PLC Handshake",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+
+        var dbHost = _provider.GetRequiredService<ProductionRepositoryHost>();
+        if (dbHost.Errors.Count > 0)
+            MessageBox.Show(string.Join("\n", dbHost.Errors), "Cảnh báo cấu hình Database",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+
         // GetRequiredService<T>(): Lấy ra service kiểu T. Nếu chưa đăng ký $T$, nó sẽ ném ra Exception (báo lỗi ngay).
         //  - Thường dùng cho các thành phần bắt buộc phải có như MainWindow.
         var window = _provider.GetRequiredService<MainWindow>();    // STEP 4: NHẤN NÚT TRÊN GIÂY CHUYỀN ĐỂ NHÀ MÁY TỰ ĐỘNG XUẤT RA 1 CHIẾC XE "MainWindow" HOÀN CHỈNH
@@ -82,6 +110,7 @@ public partial class App : Application
         //      bạn chỉ cần hỏi ServiceProvider: "Cho tôi xin một MainWindow!", và nó sẽ tự động lắp ráp hoàn chỉnh rồi đưa cho bạn!
 
         window.Show();
+        _ = InitializeDatabaseAsync();
     }
 
     // ConfigureServices — khai báo phụ thuộc: Method static này gom mọi đăng ký DI vào một chỗ.
@@ -102,11 +131,11 @@ public partial class App : Application
             // -> Bạn chỉ cần chọn 1 Tool bất kỳ đại diện (ở đây chọn GrabImageTool) để lấy ra đối tượng Assembly chung đó.
             // -> Hàm RegisterAssembly sẽ tự động quét và đăng ký TẤT CẢ các Tool còn lại trong DLL đó mà bạn không cần phải gõ tay từng Tool một!
             // Nếu không dùng RegisterAssembly, bạn sẽ phải tự đăng ký thủ công từng Tool một như thế này:
-                // registry.Register(typeof(GrabImageTool))
-                // registry.Register(typeof(ConvertColorTool));
-                // registry.Register(typeof(FindCircleTool));
-                // registry.Register(typeof(ThresholdTool));
-                // ... có 50 Tool thì phải gõ 50 dòng!
+            // registry.Register(typeof(GrabImageTool))
+            // registry.Register(typeof(ConvertColorTool));
+            // registry.Register(typeof(FindCircleTool));
+            // registry.Register(typeof(ThresholdTool));
+            // ... có 50 Tool thì phải gõ 50 dòng!
             return registry;    // Dictionary<string, ToolDescriptor>
         });
 
@@ -141,6 +170,34 @@ public partial class App : Application
         //       var window = _provider.GetRequiredService<MainWindow>();
         //       window.Show();
         //     có thể tự động lắp ráp hoàn chỉnh toàn bộ cây phụ thuộc (MainWindow ➔ FlowEditorViewModel ➔ ToolRegistry / JsonFlowRepository) chỉ bằng 1 dòng gọi duy nhất!
+
+        // Camera: đọc danh sách camera từ appsettings.json rồi đăng ký vào CameraHub.
+        // Là Singleton + IDisposable => khi OnExit gọi _provider.Dispose(), DI tự Dispose nó
+        // và nó tự gỡ + giải phóng mọi camera (nhả webcam, dừng luồng nền) — KHÔNG cần viết code dọn dẹp riêng trong OnExit.
+        services.AddSingleton(_ => new CameraBootstrapper("appsettings.json"));
+        services.AddSingleton<InspectionService>(); // Singleton: giữ flow đã nạp; DI tự Dispose khi thoát
+        services.AddSingleton(_ => new PlcLinkHost("appsettings.json")); // DI tự Dispose: đóng kết nối, dừng PLC giả
+        services.AddSingleton<IInspectionRunner, InspectionRunnerAdapter>();
+        services.AddSingleton(sp => new PlcHandshakeHost("appsettings.json",
+            sp.GetRequiredService<PlcLinkHost>(), sp.GetRequiredService<IInspectionRunner>()));
+        services.AddSingleton<VisionFlow.Editor.ViewModels.PcControlViewModel>();
+        //// Đăng ký Database Repository host và MesService chuẩn qua DI Container để giải quyết triệt để lỗi biến 'mes'
+        services.AddSingleton(_ => new ProductionRepositoryHost("appsettings.json"));
+        services.AddSingleton(sp => new MesService(sp.GetRequiredService<ProductionRepositoryHost>().Repository));
+    }
+
+    // Đây là đoạn duy nhất tạo 3 bảng InspectionRecord, ActivityRecord, AlarmRecord trong database VisionFlowMes
+    private async Task InitializeDatabaseAsync()
+    {
+        try
+        {
+            await _provider!.GetRequiredService<MesService>().InitializeAsync();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("Không khởi tạo được Database: " + ex.Message, "Lỗi Database",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)

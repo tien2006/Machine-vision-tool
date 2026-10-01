@@ -118,6 +118,7 @@ namespace VisionFlow.Editor.ViewModels // Định nghĩa không gian tên chứa
         public string Name => _parameter.DisplayName; // Thuộc tính lấy tên hiển thị của tham số
         public string Category => _parameter.Category; // Thuộc tính lấy nhóm (phân loại Category) của tham số
         public ParameterInteraction Interaction => _parameter.Interaction; // Thuộc tính lấy hình thức tương tác (ROI, Graph, ...) của tham số
+        public string SystemName => _parameter.Name; // <-- MỚI: tên kỹ thuật (VD "UseROI"), khác Name (tên hiển thị)
         public ParameterKind Kind { get; } // Thuộc tính lấy kiểu phân loại Editor Kind
         public IReadOnlyList<object> EnumOptions { get; } = Array.Empty<object>(); // Danh sách chứa các lựa chọn Enum (mặc định là mảng rỗng)
 
